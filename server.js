@@ -12,7 +12,8 @@ const rateLimit = require('express-rate-limit');
 // ✅ المكتبات السحابية
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
+const INSTRUCTOR_SECRET = process.env.INSTRUCTOR_SECRET;
 const app = express();
 
 // ==========================================
@@ -107,7 +108,7 @@ const reactionIcons = { like: '👍', love: '❤️', haha: '😂', wow: '😮',
 
 app.post('/api/register', async (req, res) => {
     const { name, email, phone, password, role, secretKey } = req.body;
-    if (role === 'admin' && secretKey !== ADMIN_SECRET) return res.json({ status: "Fail", message: "Wrong Admin Code" });
+   if (role === 'admin' && secretKey !== ADMIN_SECRET) return res.json({ status: "Fail", message: "Wrong Admin Code" });
     if (role === 'instructor' && secretKey !== INSTRUCTOR_SECRET) return res.json({ status: "Fail", message: "Wrong Instructor Code" });
 
     try {
