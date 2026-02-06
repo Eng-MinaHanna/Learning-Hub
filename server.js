@@ -16,7 +16,14 @@ const app = express();
 // 🛡️ Security Config
 // ==========================================
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" }));
-app.use(cors());
+
+// إعداد الـ CORS ليتناسب مع الرفع أونلاين
+app.use(cors({
+    origin: "*", // يمكنك استبداله برابط الفرونت إند الخاص بك لاحقاً لزيادة الأمان
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true
+}));
+
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
@@ -159,7 +166,6 @@ app.post('/api/posts/add', verifyToken, upload.single('image'), (req, res) => {
         [user_id, user_name, user_role, user_avatar, content, img], () => res.json({ status: "Success" }));
 });
 
-// ✅ دالة تعديل البوست
 app.put('/api/posts/update/:id', verifyToken, (req, res) => {
     const { content } = req.body;
     db.query("UPDATE posts SET content = ? WHERE id = ?", [content, req.params.id], (err) => {
@@ -168,7 +174,6 @@ app.put('/api/posts/update/:id', verifyToken, (req, res) => {
     });
 });
 
-// ✅ دالة حذف البوست (المسار المصحح)
 app.delete('/api/posts/delete/:id', verifyToken, (req, res) => {
     db.query("DELETE FROM posts WHERE id = ?", [req.params.id], (err) => {
         if (err) return res.status(500).json({ status: "Error" });
@@ -382,4 +387,10 @@ app.get('/api/leaderboard', verifyToken, (req, res) => {
     db.query(sql, (err, data) => res.json(data));
 });
 
-app.listen(5000, () => console.log("🚀 Server Ready on 5000..."));
+// ==========================================
+// 🚀 Deployment & Start
+// ==========================================
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`🚀 Server ready on port ${PORT}...`));
+
+module.exports = app; // ✅ ضروري جداً لتشغيل Vercel Functions
