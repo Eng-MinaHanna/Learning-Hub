@@ -267,13 +267,22 @@ app.get('/api/activities/all', verifyToken, (req, res) => {
     db.query(sql, (err, data) => res.json(data));
 });
 
+// ✅ تأكد إن المسار بيستخدم 'upload.single('material')'
 app.post('/api/activities/add', verifyToken, upload.single('material'), (req, res) => {
     if (req.user.role === 'student') return res.status(403).json({ message: "Unauthorized" });
-    const sql = "INSERT INTO activities (`title`, `description`, `type`, `instructor`, `event_date`, `file_path`, `created_by`) VALUES (?)";
-    // ✅ التعديل هنا لـ Cloudinary
+
+    // ✅ req.file.path الآن هو لينك Cloudinary مباشرة
     const filePath = req.file ? req.file.path : null;
-    const values = [req.body.title, req.body.description, req.body.type, req.body.instructor, req.body.event_date, filePath, req.user.id];
-    db.query(sql, [values], (err) => res.json({ status: "Success" }));
+    
+    const { title, description, type, instructor, event_date, user_id } = req.body;
+    
+    const sql = "INSERT INTO activities (`title`, `description`, `type`, `instructor`, `event_date`, `file_path`, `created_by`) VALUES (?, ?, ?, ?, ?, ?, ?)";
+    const values = [title, description, type, instructor, event_date, filePath, user_id];
+
+    db.query(sql, values, (err) => {
+        if (err) return res.status(500).json({ status: "Fail", message: err.message });
+        res.json({ status: "Success" });
+    });
 });
 
 app.put('/api/activities/update/:id', verifyToken, (req, res) => {
