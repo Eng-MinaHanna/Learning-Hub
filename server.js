@@ -9,6 +9,9 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+// ✅ المكتبات الجديدة للرفع السحابي
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
 
@@ -17,15 +20,13 @@ const app = express();
 // ==========================================
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" }));
 
-// إعداد الـ CORS ليتناسب مع الرفع أونلاين
 app.use(cors({
-    origin: "https://learning-hub-web-six.vercel.app", // ده اللينك اللي المتصفح معترض عليه
+    origin: "https://learning-hub-web-six.vercel.app",
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
 }));
 
 app.use(express.json());
-app.use('/uploads', express.static('uploads'));
 
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -39,11 +40,21 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET;
 const INSTRUCTOR_SECRET = process.env.INSTRUCTOR_SECRET;
 
 // ==========================================
-// 📂 File Uploads Config
+// ☁️ Cloudinary Configuration (The Fix)
 // ==========================================
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/'),
-    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
+cloudinary.config({
+    cloud_name: 'ddgp71uok',
+    api_key: '581267836978872',
+    api_secret: '-jLxAlPA7tQ587Xdd38nYJ0H4lA'
+});
+
+// إعداد المخزن السحابي بدل الهارد ديسك المحلي (عشان Vercel يوافق)
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'ieee_et5_uploads',
+        allowed_formats: ['jpg', 'png', 'jpeg', 'pdf'],
+    },
 });
 const upload = multer({ storage });
 
@@ -139,9 +150,15 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
         }
         let sql = "UPDATE users SET name=?, email=?, phone=?, password=?";
         let params = [name, email, phone, finalPassword];
-        if (req.file) { sql += ", profile_pic=?"; params.push(req.file.path.replace(/\\/g, "/")); }
+
+        // ✅ التعديل هنا: نستخدم رابط Cloudinary مباشرة
+        if (req.file) {
+            sql += ", profile_pic=?";
+            params.push(req.file.path);
+        }
+
         sql += " WHERE id=?"; params.push(id);
-        db.query(sql, params, () => res.json({ status: "Success", newProfilePic: req.file?.path.replace(/\\/g, "/") }));
+        db.query(sql, params, () => res.json({ status: "Success", newProfilePic: req.file?.path }));
     });
 });
 
@@ -161,7 +178,8 @@ app.get('/api/posts', verifyToken, (req, res) => {
 
 app.post('/api/posts/add', verifyToken, upload.single('image'), (req, res) => {
     const { user_id, user_name, user_role, user_avatar, content } = req.body;
-    const img = req.file ? req.file.path.replace(/\\/g, "/") : null;
+    // ✅ التعديل هنا لـ Cloudinary
+    const img = req.file ? req.file.path : null;
     db.query("INSERT INTO posts (user_id, user_name, user_role, user_avatar, content, post_image) VALUES (?,?,?,?,?,?)",
         [user_id, user_name, user_role, user_avatar, content, img], () => res.json({ status: "Success" }));
 });
@@ -252,7 +270,8 @@ app.get('/api/activities/all', verifyToken, (req, res) => {
 app.post('/api/activities/add', verifyToken, upload.single('material'), (req, res) => {
     if (req.user.role === 'student') return res.status(403).json({ message: "Unauthorized" });
     const sql = "INSERT INTO activities (`title`, `description`, `type`, `instructor`, `event_date`, `file_path`, `created_by`) VALUES (?)";
-    const filePath = req.file ? req.file.path.replace(/\\/g, "/") : null;
+    // ✅ التعديل هنا لـ Cloudinary
+    const filePath = req.file ? req.file.path : null;
     const values = [req.body.title, req.body.description, req.body.type, req.body.instructor, req.body.event_date, filePath, req.user.id];
     db.query(sql, [values], (err) => res.json({ status: "Success" }));
 });
@@ -332,7 +351,8 @@ app.get('/api/materials/:courseId', verifyToken, (req, res) => {
 });
 
 app.post('/api/materials/add', verifyToken, upload.single('file'), (req, res) => {
-    const filePath = req.file ? req.file.path.replace(/\\/g, "/") : null;
+    // ✅ التعديل هنا لـ Cloudinary
+    const filePath = req.file ? req.file.path : null;
     db.query("INSERT INTO course_materials (course_id, title, file_path) VALUES (?, ?, ?)", [req.body.course_id, req.body.title, filePath], () => res.json({ status: "Success" }));
 });
 
@@ -393,4 +413,4 @@ app.get('/api/leaderboard', verifyToken, (req, res) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server ready on port ${PORT}...`));
 
-module.exports = app; // ✅ ضروري جداً لتشغيل Vercel Functions
+module.exports = app;
