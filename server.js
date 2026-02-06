@@ -19,7 +19,7 @@ app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" }));
 
 // إعداد الـ CORS ليتناسب مع الرفع أونلاين
 app.use(cors({
-    origin: "https://learning-hub-web-six.vercel.app", // حط هنا رابط الفرونت إند بتاعك اللي طلع من Vercel
+    origin: "https://learning-hub-web-six.vercel.app", // ده اللينك اللي المتصفح معترض عليه
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
 }));
