@@ -214,15 +214,26 @@ app.get('/api/comments/:postId', verifyToken, (req, res) => {
     db.query("SELECT * FROM comments WHERE post_id=? ORDER BY created_at ASC", [req.params.postId], (err, data) => res.json(data));
 });
 
+// ✅ تعديل جلب المستخدمين للأدمن
+app.get('/api/users', verifyAdmin, (req, res) => {
+    db.query("SELECT id, name, email, phone, role, profile_pic, created_at FROM users ORDER BY created_at DESC", (err, data) => {
+        if (err) return res.status(500).json({ status: "Error", message: "Database Error" });
+        res.json(data || []); // نضمن إنه يرجع مصفوفة حتى لو فاضية
+    });
+});
+
+// ✅ تعديل إضافة التعليقات للكورسات والبوستات (توحيد المتغيرات)
 app.post('/api/comments/add', verifyToken, (req, res) => {
-    const { post_id, user_id, user_name, user_avatar, comment_text } = req.body;
-    db.query("INSERT INTO comments (post_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)",
-        [post_id, user_id, user_name, user_avatar, comment_text], () => {
-            db.query("SELECT user_id FROM posts WHERE id=?", [post_id], (err, p) => {
-                if (p && p.length > 0 && p[0].user_id !== user_id) createNotification(p[0].user_id, user_name, user_avatar, "commented on your post", "comment");
-            });
-            res.json({ status: "Success" });
-        });
+    const { post_id, course_id, user_id, user_name, user_avatar, comment_text } = req.body;
+    // نستخدم course_id لو post_id مش موجود
+    const targetId = post_id || course_id;
+    const uid = user_id || req.user.id;
+
+    const sql = "INSERT INTO comments (post_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)";
+    db.query(sql, [targetId, uid, user_name, user_avatar, comment_text], (err) => {
+        if (err) return res.status(500).json({ status: "Fail", message: err.message });
+        res.json({ status: "Success" });
+    });
 });
 
 // ==========================================
