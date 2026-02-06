@@ -12,6 +12,7 @@ const rateLimit = require('express-rate-limit');
 // ✅ المكتبات السحابية
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
+
 const app = express();
 
 // ==========================================
@@ -50,7 +51,7 @@ cloudinary.config({
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: {
-        folder: 'ieee_et5_main', // الفولدر اللي هيتخزن فيه كل حاجة
+        folder: 'ieee_et5_main', 
         allowed_formats: ['jpg', 'png', 'jpeg', 'pdf'],
     },
 });
@@ -68,7 +69,7 @@ const db = mysql.createConnection({
 
 db.connect((err) => {
     if (err) console.error('❌ Database Connection Failed:', err.message);
-    else console.log('✅ DB Connected & Cloudinary Ready 🚀');
+    else console.log('✅ Server Secured & DB Connected 🚀');
 });
 
 // ==========================================
@@ -106,7 +107,7 @@ const reactionIcons = { like: '👍', love: '❤️', haha: '😂', wow: '😮',
 
 app.post('/api/register', async (req, res) => {
     const { name, email, phone, password, role, secretKey } = req.body;
-   if (role === 'admin' && secretKey !== ADMIN_SECRET) return res.json({ status: "Fail", message: "Wrong Admin Code" });
+    if (role === 'admin' && secretKey !== ADMIN_SECRET) return res.json({ status: "Fail", message: "Wrong Admin Code" });
     if (role === 'instructor' && secretKey !== INSTRUCTOR_SECRET) return res.json({ status: "Fail", message: "Wrong Instructor Code" });
 
     try {
@@ -151,7 +152,7 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
 
         if (req.file) {
             sql += ", profile_pic=?";
-            params.push(req.file.path); // Cloudinary URL
+            params.push(req.file.path);
         }
 
         sql += " WHERE id=?"; params.push(id);
@@ -180,7 +181,6 @@ app.post('/api/posts/add', verifyToken, upload.single('image'), (req, res) => {
         [user_id, user_name, user_role, user_avatar, content, img], () => res.json({ status: "Success" }));
 });
 
-// ... (دوال الـ React والـ Comments)
 app.post('/api/posts/react', verifyToken, (req, res) => {
     const { post_id, user_id, reaction_type } = req.body;
     db.query("SELECT name, profile_pic FROM users WHERE id=?", [user_id], (err, u) => {
@@ -213,21 +213,17 @@ app.get('/api/comments/:postId', verifyToken, (req, res) => {
     db.query("SELECT * FROM comments WHERE post_id=? ORDER BY created_at ASC", [req.params.postId], (err, data) => res.json(data));
 });
 
-// ✅ تعديل جلب المستخدمين للأدمن
 app.get('/api/users', verifyAdmin, (req, res) => {
     db.query("SELECT id, name, email, phone, role, profile_pic, created_at FROM users ORDER BY created_at DESC", (err, data) => {
         if (err) return res.status(500).json({ status: "Error", message: "Database Error" });
-        res.json(data || []); // نضمن إنه يرجع مصفوفة حتى لو فاضية
+        res.json(data || []); 
     });
 });
 
-// ✅ تعديل إضافة التعليقات للكورسات والبوستات (توحيد المتغيرات)
 app.post('/api/comments/add', verifyToken, (req, res) => {
     const { post_id, course_id, user_id, user_name, user_avatar, comment_text } = req.body;
-    // نستخدم course_id لو post_id مش موجود
     const targetId = post_id || course_id;
     const uid = user_id || req.user.id;
-
     const sql = "INSERT INTO comments (post_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)";
     db.query(sql, [targetId, uid, user_name, user_avatar, comment_text], (err) => {
         if (err) return res.status(500).json({ status: "Fail", message: err.message });
@@ -236,7 +232,7 @@ app.post('/api/comments/add', verifyToken, (req, res) => {
 });
 
 // ==========================================
-// 🎓 Activities & Courses (تم الإصلاح هنا)
+// 🎓 Activities & Courses (التحديث هنا)
 // ==========================================
 
 app.get('/api/activities/all', verifyToken, (req, res) => {
@@ -245,30 +241,42 @@ app.get('/api/activities/all', verifyToken, (req, res) => {
     db.query(sql, (err, data) => res.json(data));
 });
 
-// ✅ تصحيح جملة الـ SQL: VALUES كانت ناقصة علامات استفهام
 app.post('/api/activities/add', verifyToken, upload.single('material'), (req, res) => {
     if (req.user.role === 'student') return res.status(403).json({ message: "Unauthorized" });
-    
-    const filePath = req.file ? req.file.path : null; // Cloudinary URL
+    const filePath = req.file ? req.file.path : null;
     const { title, description, type, instructor, event_date } = req.body;
     const createdBy = req.user.id;
-
     const sql = "INSERT INTO activities (title, description, type, instructor, event_date, file_path, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)";
     const params = [title, description, type, instructor, event_date, filePath, createdBy];
-
     db.query(sql, params, (err) => {
-        if (err) {
-            console.error("DB Error:", err);
-            return res.status(500).json({ status: "Fail", message: "Database Error" });
-        }
+        if (err) return res.status(500).json({ status: "Fail", message: "Database Error" });
         res.json({ status: "Success" });
     });
 });
 
-app.put('/api/activities/update/:id', verifyToken, (req, res) => {
+// ✅ دالة التحديث المعدلة لدعم الصور
+app.put('/api/activities/update/:id', verifyToken, upload.single('material'), (req, res) => {
     if (req.user.role === 'student') return res.status(403).json({ message: "Unauthorized" });
-    const sql = "UPDATE activities SET title=?, description=?, instructor=?, event_date=? WHERE id=?";
-    db.query(sql, [req.body.title, req.body.description, req.body.instructor, req.body.event_date, req.params.id], (err) => res.json({ status: "Updated" }));
+    
+    const { title, description, instructor, event_date } = req.body;
+    const activityId = req.params.id;
+
+    // بناء جملة SQL ديناميكية عشان لو مفيش صورة مرفوعة ميمسحش القديمة
+    let sql = "UPDATE activities SET title=?, description=?, instructor=?, event_date=?";
+    let params = [title, description, instructor, event_date];
+
+    if (req.file) {
+        sql += ", file_path=?";
+        params.push(req.file.path); // Cloudinary URL
+    }
+
+    sql += " WHERE id=?";
+    params.push(activityId);
+
+    db.query(sql, params, (err) => {
+        if (err) return res.status(500).json({ status: "Fail", message: err.message });
+        res.json({ status: "Updated", newImagePath: req.file ? req.file.path : null });
+    });
 });
 
 app.delete('/api/activities/delete/:id', verifyToken, (req, res) => {
@@ -352,7 +360,7 @@ app.get('/api/leaderboard', verifyToken, (req, res) => {
 });
 
 // ==========================================
-// 🚀 Deployment & Start
+// 🚀 Start
 // ==========================================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}...`));
