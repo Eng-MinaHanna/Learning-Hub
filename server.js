@@ -12,8 +12,6 @@ const rateLimit = require('express-rate-limit');
 // ✅ المكتبات السحابية
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const ADMIN_SECRET = process.env.ADMIN_SECRET;
-const INSTRUCTOR_SECRET = process.env.INSTRUCTOR_SECRET;
 const app = express();
 
 // ==========================================
