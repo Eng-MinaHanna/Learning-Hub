@@ -401,13 +401,23 @@ app.get('/api/materials/:courseId', verifyToken, (req, res) => {
     db.query("SELECT * FROM course_materials WHERE course_id = ?", [req.params.courseId], (err, data) => res.json(data));
 });
 
-app.post('/api/materials/add', verifyToken, upload.single('file'), (req, res) => {
-    if (!req.file) return res.status(400).json({ status: "Fail", message: "No file uploaded" });
-    const filePath = req.file.path;
+// ✅ (تعديل) إضافة ماتريال عن طريق لينك خارجي (Drive)
+app.post('/api/materials/add', verifyToken, (req, res) => {
+    // نستقبل البيانات كـ JSON عادي مش FormData
+    const { course_id, title, link } = req.body; 
+
+    if (!course_id || !title || !link) {
+        return res.status(400).json({ status: "Fail", message: "Missing fields" });
+    }
+
+    // بنخزن اللينك مكان الـ file_path القديم
     db.query("INSERT INTO course_materials (course_id, title, file_path) VALUES (?, ?, ?)", 
-        [req.body.course_id, req.body.title, filePath], 
+        [course_id, title, link], 
         (err) => {
-            if (err) return res.status(500).json({ status: "Fail" });
+            if (err) {
+                console.error("DB Error:", err);
+                return res.status(500).json({ status: "Fail", message: "Database Error" });
+            }
             res.json({ status: "Success" });
         }
     );
