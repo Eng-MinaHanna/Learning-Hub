@@ -40,7 +40,7 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET;
 const INSTRUCTOR_SECRET = process.env.INSTRUCTOR_SECRET;
 
 // ==========================================
-// ☁️ Cloudinary Configuration
+// ☁️ Cloudinary Configuration (تم التحديث)
 // ==========================================
 cloudinary.config({
     cloud_name: 'ddgp71uok',
@@ -48,11 +48,13 @@ cloudinary.config({
     api_secret: '-jLxAlPA7tQ587Xdd38nYJ0H4lA'
 });
 
+// ✅ التعديل: السماح بملفات الأوفيس والضغط
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: {
         folder: 'ieee_et5_main', 
-        allowed_formats: ['jpg', 'png', 'jpeg', 'pdf'],
+        resource_type: 'auto', // مهم جداً عشان يقبل فيديو وملفات غير الصور
+        allowed_formats: ['jpg', 'png', 'jpeg', 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'zip', 'rar', 'mp4'],
     },
 });
 const upload = multer({ storage });
@@ -213,6 +215,15 @@ app.get('/api/comments/:postId', verifyToken, (req, res) => {
     db.query("SELECT * FROM comments WHERE post_id=? ORDER BY created_at ASC", [req.params.postId], (err, data) => res.json(data));
 });
 
+// ✅ إضافة مسار حذف التعليقات
+app.delete('/api/comments/delete/:id', verifyToken, (req, res) => {
+    // يمكن هنا إضافة شرط إن الأدمن أو صاحب الكومنت بس اللي يمسح
+    db.query("DELETE FROM comments WHERE id = ?", [req.params.id], (err) => {
+        if (err) return res.status(500).json({ status: "Fail" });
+        res.json({ status: "Deleted" });
+    });
+});
+
 app.get('/api/users', verifyAdmin, (req, res) => {
     db.query("SELECT id, name, email, phone, role, profile_pic, created_at FROM users ORDER BY created_at DESC", (err, data) => {
         if (err) return res.status(500).json({ status: "Error", message: "Database Error" });
@@ -232,7 +243,7 @@ app.post('/api/comments/add', verifyToken, (req, res) => {
 });
 
 // ==========================================
-// 🎓 Activities & Courses (التحديث هنا)
+// 🎓 Activities & Courses
 // ==========================================
 
 app.get('/api/activities/all', verifyToken, (req, res) => {
@@ -254,20 +265,18 @@ app.post('/api/activities/add', verifyToken, upload.single('material'), (req, re
     });
 });
 
-// ✅ دالة التحديث المعدلة لدعم الصور
 app.put('/api/activities/update/:id', verifyToken, upload.single('material'), (req, res) => {
     if (req.user.role === 'student') return res.status(403).json({ message: "Unauthorized" });
     
     const { title, description, instructor, event_date } = req.body;
     const activityId = req.params.id;
 
-    // بناء جملة SQL ديناميكية عشان لو مفيش صورة مرفوعة ميمسحش القديمة
     let sql = "UPDATE activities SET title=?, description=?, instructor=?, event_date=?";
     let params = [title, description, instructor, event_date];
 
     if (req.file) {
         sql += ", file_path=?";
-        params.push(req.file.path); // Cloudinary URL
+        params.push(req.file.path); 
     }
 
     sql += " WHERE id=?";
@@ -288,9 +297,29 @@ app.get('/api/videos/:courseId', verifyToken, (req, res) => {
     db.query("SELECT * FROM course_videos WHERE course_id=? ORDER BY video_date ASC", [req.params.courseId], (err, data) => res.json(data));
 });
 
-app.post('/api/videos/add', verifyToken, (req, res) => {
+// ✅ تحديث: إضافة دعم لرفع ملف فيديو أو لينك
+app.post('/api/videos/add', verifyToken, upload.single('video_file'), (req, res) => {
+    // لو فيه ملف مرفوع (فيديو) هناخد المسار بتاعه، لو لا هناخد اللينك العادي
+    const videoLink = req.file ? req.file.path : req.body.video_link;
     const sql = "INSERT INTO course_videos (course_id, video_title, video_link, video_date) VALUES (?, ?, ?, ?)";
-    db.query(sql, [req.body.course_id, req.body.video_title, req.body.video_link, req.body.video_date], (err, result) => res.json({ status: "Success", id: result.insertId }));
+    db.query(sql, [req.body.course_id, req.body.video_title, videoLink, req.body.video_date], (err, result) => res.json({ status: "Success", id: result.insertId }));
+});
+
+// ✅ مسارات التحكم في الفيديو (كانت ناقصة)
+app.put('/api/videos/update/:id', verifyToken, upload.single('video_file'), (req, res) => {
+    const videoLink = req.file ? req.file.path : req.body.video_link;
+    const sql = "UPDATE course_videos SET video_title=?, video_link=?, video_date=? WHERE id=?";
+    db.query(sql, [req.body.video_title, videoLink, req.body.video_date, req.params.id], (err) => {
+        if (err) return res.status(500).json({ status: "Fail" });
+        res.json({ status: "Updated" });
+    });
+});
+
+app.delete('/api/videos/delete/:id', verifyToken, (req, res) => {
+    db.query("DELETE FROM course_videos WHERE id = ?", [req.params.id], (err) => {
+        if (err) return res.status(500).json({ status: "Fail" });
+        res.json({ status: "Deleted" });
+    });
 });
 
 app.get('/api/schedule/all', verifyToken, (req, res) => {
@@ -335,9 +364,25 @@ app.post('/api/quiz/add', verifyToken, (req, res) => {
     db.query(sql, [req.body.course_id, req.body.question_text, req.body.option_a, req.body.option_b, req.body.option_c, req.body.option_d, req.body.correct_answer], () => res.json({ status: "Success" }));
 });
 
+// ✅ إضافة مسار حذف الأسئلة
+app.delete('/api/quiz/delete/:id', verifyToken, (req, res) => {
+    db.query("DELETE FROM quiz_questions WHERE id = ?", [req.params.id], (err) => {
+        if (err) return res.status(500).json({ status: "Fail" });
+        res.json({ status: "Deleted" });
+    });
+});
+
 app.post('/api/materials/add', verifyToken, upload.single('file'), (req, res) => {
     const filePath = req.file ? req.file.path : null;
     db.query("INSERT INTO course_materials (course_id, title, file_path) VALUES (?, ?, ?)", [req.body.course_id, req.body.title, filePath], () => res.json({ status: "Success" }));
+});
+
+// ✅ إضافة مسار حذف الماتريال
+app.delete('/api/materials/delete/:id', verifyToken, (req, res) => {
+    db.query("DELETE FROM course_materials WHERE id = ?", [req.params.id], (err) => {
+        if (err) return res.status(500).json({ status: "Fail" });
+        res.json({ status: "Deleted" });
+    });
 });
 
 // ==========================================
