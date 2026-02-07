@@ -260,7 +260,29 @@ app.post('/api/comments/add', verifyToken, (req, res) => {
         res.json({ status: "Success" });
     });
 });
+// ✅ مسار حذف البوست (كان ناقص)
+app.delete('/api/posts/delete/:id', verifyToken, (req, res) => {
+    // التحقق إن اللي بيمسح هو صاحب البوست أو الأدمن
+    const postId = req.params.id;
+    const userId = req.user.id;
+    const userRole = req.user.role;
 
+    // الأول نجيب البوست عشان نتأكد من صاحبه
+    db.query("SELECT user_id FROM posts WHERE id = ?", [postId], (err, data) => {
+        if (err) return res.status(500).json({ status: "Error", message: "DB Error" });
+        if (data.length === 0) return res.status(404).json({ status: "Fail", message: "Post not found" });
+
+        // لو المستخدم هو صاحب البوست أو هو أدمن -> امسح
+        if (data[0].user_id === userId || userRole === 'admin') {
+            db.query("DELETE FROM posts WHERE id = ?", [postId], (err) => {
+                if (err) return res.status(500).json({ status: "Error", message: "Deletion failed" });
+                res.json({ status: "Deleted" });
+            });
+        } else {
+            res.status(403).json({ status: "Fail", message: "Not authorized" });
+        }
+    });
+});
 // ==========================================
 // 🎓 Activities & Courses
 // ==========================================
