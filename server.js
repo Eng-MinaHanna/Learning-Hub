@@ -502,6 +502,68 @@ app.get('/api/team', verifyToken, (req, res) => {
 });
 
 // ==========================================
+// 📝 Tasks & Submissions APIs (New Feature)
+// ==========================================
+
+// 1. الطالب يرفع التاسك بتاعه
+app.post('/api/tasks/submit', verifyToken, (req, res) => {
+    const { course_id, video_id, task_link } = req.body;
+    const user_id = req.user.id;
+
+    // بنعمل INSERT أو UPDATE لو الطالب رفع قبل كدة لنفس الفيديو
+    const sql = `INSERT INTO task_submissions (user_id, course_id, video_id, task_link) 
+                 VALUES (?, ?, ?, ?) 
+                 ON DUPLICATE KEY UPDATE task_link = VALUES(task_link), submitted_at = CURRENT_TIMESTAMP`;
+    
+    // ملحوظة: لو الجدول مفيهوش Unique Key على (user_id, video_id)، السطر اللي فوق هيضيف صف جديد كل مرة.
+    // للأمان هنستخدم INSERT عادي ولو عايز تمنع التكرار ضيف Unique Index في الداتابيز.
+    // هنا هنستخدم INSERT بسيط للتسهيل:
+    db.query("INSERT INTO task_submissions (user_id, course_id, video_id, task_link) VALUES (?, ?, ?, ?)", 
+        [user_id, course_id, video_id, task_link], 
+        (err) => {
+            if (err) return res.status(500).json({ status: "Fail", message: "DB Error" });
+            res.json({ status: "Success" });
+        }
+    );
+});
+
+// 2. الطالب يشوف التاسك اللي هو رفعه (عشان يتأكد)
+app.get('/api/tasks/my/:videoId', verifyToken, (req, res) => {
+    const user_id = req.user.id;
+    const video_id = req.params.videoId;
+    db.query("SELECT * FROM task_submissions WHERE user_id = ? AND video_id = ? ORDER BY submitted_at DESC LIMIT 1", 
+        [user_id, video_id], 
+        (err, data) => res.json(data)
+    );
+});
+
+// 3. المحاضر/الأدمن يشوفوا كل التاسكات للفيديو ده
+app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
+    const video_id = req.params.videoId;
+    const user_id = req.user.id;
+    const user_role = req.user.role;
+
+    // الأول لازم نتأكد إن اللي بيطلب الداتا دي هو "الأدمن" أو "صاحب الكورس"
+    const checkCourseSql = "SELECT a.created_by FROM activities a JOIN course_videos v ON a.id = v.course_id WHERE v.id = ?";
+    
+    db.query(checkCourseSql, [video_id], (err, courseData) => {
+        if (err || courseData.length === 0) return res.status(404).json({ message: "Course not found" });
+
+        const instructorId = courseData[0].created_by;
+
+        if (user_role === 'admin' || user_id === instructorId) {
+            // صلاحية مقبولة -> هات الداتا
+            const sql = `SELECT t.*, u.name as student_name, u.profile_pic 
+                         FROM task_submissions t 
+                         JOIN users u ON t.user_id = u.id 
+                         WHERE t.video_id = ? ORDER BY t.submitted_at DESC`;
+            db.query(sql, [video_id], (err, data) => res.json(data));
+        } else {
+            res.status(403).json({ message: "Unauthorized: You are not the instructor" });
+        }
+    });
+});
+// ==========================================
 // 🚀 Start
 // ==========================================
 const PORT = process.env.PORT || 5000;
