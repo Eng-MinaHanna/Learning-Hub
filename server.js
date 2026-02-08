@@ -9,7 +9,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-// ✅ المكتبات السحابية
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
@@ -76,15 +75,24 @@ db.connect((err) => {
 // ==========================================
 // 🛡️ Middlewares
 // ==========================================
+// ✅ Updated: Fetches latest role from DB on every request
 const verifyToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
     if (!token) return res.status(403).json({ status: "Fail", message: "No Token" });
 
-    jwt.verify(token, JWT_SECRET, (err, user) => {
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
         if (err) return res.status(403).json({ status: "Fail", message: "Invalid Token" });
-        req.user = user;
-        next();
+        
+        // Fetch user from DB to ensure role is up-to-date
+        const sql = "SELECT id, role, email, name FROM users WHERE id = ?";
+        db.query(sql, [decoded.id], (dbErr, data) => {
+            if (dbErr || data.length === 0) {
+                return res.status(401).json({ status: "Fail", message: "User no longer exists" });
+            }
+            req.user = data[0]; 
+            next();
+        });
     });
 };
 
@@ -106,7 +114,7 @@ const reactionIcons = { like: '👍', love: '❤️', haha: '😂', wow: '😮',
 // 🔐 Auth APIs
 // ==========================================
 
-// تسجيل عادي
+// Register
 app.post('/api/register', async (req, res) => {
     const { name, email, phone, password, role, secretKey } = req.body;
     if (role === 'admin' && secretKey !== ADMIN_SECRET) return res.json({ status: "Fail", message: "Wrong Admin Code" });
@@ -122,10 +130,9 @@ app.post('/api/register', async (req, res) => {
     } catch (e) { res.status(500).json({ status: "Error" }); }
 });
 
-// إضافة مستخدم بواسطة الأدمن
+// Add User (Admin)
 app.post('/api/admin/add-user', verifyAdmin, async (req, res) => {
     const { name, email, phone, password, role } = req.body;
-    
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         const sql = "INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)";
@@ -136,6 +143,7 @@ app.post('/api/admin/add-user', verifyAdmin, async (req, res) => {
     } catch (e) { res.status(500).json({ status: "Error" }); }
 });
 
+// Login
 app.post('/api/login', (req, res) => {
     const { email, password } = req.body;
     db.query("SELECT * FROM users WHERE email = ?", [email], async (err, data) => {
@@ -151,18 +159,15 @@ app.post('/api/login', (req, res) => {
     });
 });
 
-// ✅✅✅ FIX: Safe Update API (Prevents 500 Error) ✅✅✅
+// Update Profile
 app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => {
     const { id, name, email, phone, oldPassword, newPassword, password, linkedin, cv_link, job_title, role } = req.body;
-    
     const passToUpdate = newPassword || password;
 
-    // حماية: التأكد أن المستخدم يعدل بياناته هو فقط أو أنه أدمن
     if (req.user.id != id && req.user.role !== 'admin') {
         return res.status(403).json({ status: "Fail", message: "Unauthorized" });
     }
 
-    // 1. البحث عن المستخدم أولاً
     db.query("SELECT * FROM users WHERE id = ?", [id], async (err, users) => {
         if (err) return res.status(500).json({ status: "Error", message: "Database Error" });
         if (users.length === 0) return res.json({ status: "Fail", message: "User not found" });
@@ -170,7 +175,6 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
         try {
             let finalPassword = users[0].password;
             
-            // 2. معالجة تغيير الباسورد
             if (passToUpdate && passToUpdate.trim() !== "") {
                 if (req.user.role !== 'admin') {
                     if (!oldPassword) return res.json({ status: "Fail", message: "Old password required" });
@@ -180,13 +184,11 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
                 finalPassword = await bcrypt.hash(passToUpdate, 10);
             }
 
-            // 3. تحديد الـ Role (الأدمن بس اللي يقدر يغيره)
             let finalRole = users[0].role;
             if (req.user.role === 'admin' && role) {
                 finalRole = role;
             }
 
-            // 4. تجهيز القيم
             const safeLinkedin = linkedin || null;
             const safeCv = cv_link || null;
             const safeJob = job_title || null;
@@ -202,20 +204,14 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
             sql += " WHERE id=?";
             params.push(id);
 
-            // 5. تنفيذ التعديل
             db.query(sql, params, (updateErr, result) => {
                 if (updateErr) {
                     console.error("SQL Error:", updateErr);
-                    if (updateErr.code === 'ER_BAD_FIELD_ERROR') {
-                        return res.json({ status: "Fail", message: "Database column missing. Contact Admin." });
-                    }
                     return res.json({ status: "Fail", message: "Update Failed" });
                 }
-                
                 if (result.affectedRows === 0) {
                     return res.json({ status: "Fail", message: "No changes made" });
                 }
-
                 res.json({ status: "Success", newProfilePic: req.file?.path });
             });
 
@@ -314,9 +310,9 @@ app.delete('/api/posts/delete/:id', verifyToken, (req, res) => {
     });
 });
 
-// ---------------------------
+// ==========================================
 // 💬 Comments APIs
-// ---------------------------
+// ==========================================
 
 app.get('/api/comments/:postId', verifyToken, (req, res) => {
     db.query("SELECT * FROM comments WHERE post_id=? ORDER BY created_at ASC", [req.params.postId], (err, data) => res.json(data));
@@ -614,11 +610,10 @@ app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
 // 🤝 Partners & Sponsors APIs
 // ==========================================
 
-// 1. إضافة راعي أو شريك جديد (للأدمن فقط)
+// 1. Add Partner/Sponsor (Admin only)
 app.post('/api/admin/sponsors/add', verifyAdmin, upload.single('logo'), (req, res) => {
     const { name, type, website_link } = req.body;
     
-    // لو الأدمن رفع ملف، نستخدمه. لو مرفعش وحط لينك مباشر، نستخدم اللينك (اختياري)
     const logoUrl = req.file ? req.file.path : req.body.logo_url;
 
     if (!name || !type || !logoUrl) {
@@ -632,7 +627,7 @@ app.post('/api/admin/sponsors/add', verifyAdmin, upload.single('logo'), (req, re
     });
 });
 
-// 2. حذف (للأدمن فقط)
+// 2. Delete (Admin only)
 app.delete('/api/admin/sponsors/delete/:id', verifyAdmin, (req, res) => {
     db.query("DELETE FROM sponsors_partners WHERE id = ?", [req.params.id], (err) => {
         if (err) return res.status(500).json({ status: "Error" });
@@ -640,7 +635,7 @@ app.delete('/api/admin/sponsors/delete/:id', verifyAdmin, (req, res) => {
     });
 });
 
-// 3. جلب الكل (متاح للجميع - للصفحة الرئيسية ولوحة التحكم)
+// 3. Fetch All (Public)
 app.get('/api/public/sponsors', (req, res) => {
     db.query("SELECT * FROM sponsors_partners ORDER BY created_at DESC", (err, data) => {
         if (err) return res.status(500).json({ status: "Error" });
