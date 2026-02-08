@@ -18,13 +18,11 @@ const app = express();
 // 🛡️ Security Config
 // ==========================================
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" }));
-
 app.use(cors({
     origin: ["https://learning-hub-web-six.vercel.app", "http://localhost:3000", "https://learning-hub-et5.vercel.app"], 
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
 }));
-
 app.use(express.json());
 
 const limiter = rateLimit({
@@ -56,10 +54,10 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage });
 
 // ==========================================
-// 🗄️ Database Connection (Fixed for Limit 5)
+// 🗄️ Database Connection (Optimized for Free Tier)
 // ==========================================
 const db = mysql.createPool({
-    connectionLimit: 4, // ✅ تم التعديل لـ 4 عشان الداتا بيز متطردكش (Error 1226)
+    connectionLimit: 4, // ✅ المحافظة على اتصال واحد لـ DBeaver
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASS || '',
@@ -70,7 +68,7 @@ const db = mysql.createPool({
     connectTimeout: 30000
 });
 
-console.log('✅ Robust Connection Pool Active (Safe Mode) 🚀');
+console.log('✅ Robust Database Pool Ready 🚀');
 
 // ==========================================
 // 🛡️ Middlewares
@@ -78,12 +76,10 @@ console.log('✅ Robust Connection Pool Active (Safe Mode) 🚀');
 const verifyToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
-    
     if (!token) return res.status(401).json({ status: "Fail", message: "No Token Provided" });
 
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
         if (err) return res.status(401).json({ status: "Fail", message: "Invalid Token" });
-        
         db.query("SELECT id, role, email, name FROM users WHERE id = ?", [decoded.id], (dbErr, data) => {
             if (dbErr || !data || data.length === 0) {
                 req.user = { id: decoded.id, role: decoded.role };
@@ -103,8 +99,7 @@ const verifyAdmin = (req, res, next) => {
 };
 
 const createNotification = (userId, senderName, senderAvatar, message, type) => {
-    const sql = "INSERT INTO notifications (user_id, sender_name, sender_avatar, message, type) VALUES (?, ?, ?, ?, ?)";
-    db.query(sql, [userId, senderName, senderAvatar, message, type]);
+    db.query("INSERT INTO notifications (user_id, sender_name, sender_avatar, message, type) VALUES (?, ?, ?, ?, ?)", [userId, senderName, senderAvatar, message, type]);
 };
 
 const reactionIcons = { like: '👍', love: '❤️', haha: '😂', wow: '😮', sad: '😢', angry: '😡' };
@@ -120,21 +115,8 @@ app.post('/api/register', async (req, res) => {
 
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
-        const sql = "INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)";
-        db.query(sql, [name, email, phone, hashedPassword, role], (err) => {
+        db.query("INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)", [name, email, phone, hashedPassword, role], (err) => {
             if (err) return res.json({ status: "Fail", message: "Email already exists" });
-            res.json({ status: "Success" });
-        });
-    } catch (e) { res.status(500).json({ status: "Error" }); }
-});
-
-app.post('/api/admin/add-user', verifyAdmin, async (req, res) => {
-    const { name, email, phone, password, role } = req.body;
-    try {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const sql = "INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)";
-        db.query(sql, [name, email, phone, hashedPassword, role], (err) => {
-            if (err) return res.json({ status: "Fail", message: "Error" });
             res.json({ status: "Success" });
         });
     } catch (e) { res.status(500).json({ status: "Error" }); }
@@ -157,48 +139,29 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
     const { id, name, email, phone, linkedin, cv_link, job_title, role, newPassword } = req.body;
     db.query("SELECT * FROM users WHERE id = ?", [id], async (err, users) => {
         if (err || users.length === 0) return res.status(500).json({ status: "Fail" });
-        
         let finalPassword = users[0].password;
-        if (newPassword && newPassword.trim() !== "") {
-            finalPassword = await bcrypt.hash(newPassword, 10);
-        }
-
+        if (newPassword && newPassword.trim() !== "") finalPassword = await bcrypt.hash(newPassword, 10);
         let sql = "UPDATE users SET name=?, email=?, phone=?, password=?, role=?, linkedin=?, cv_link=?, job_title=?";
         let params = [name, email, phone, finalPassword, role || users[0].role, linkedin, cv_link, job_title];
-
         if (req.file) { sql += ", profile_pic=?"; params.push(req.file.path); }
         sql += " WHERE id=?"; params.push(id);
-
-        db.query(sql, params, (err) => {
-            if (err) return res.json({ status: "Fail" });
-            res.json({ status: "Success", newProfilePic: req.file?.path });
-        });
+        db.query(sql, params, () => res.json({ status: "Success", newProfilePic: req.file?.path }));
     });
 });
 
-// ✅ Fixed 500 for Subscription (Return false instead of crashing)
 app.post('/api/check-subscription', verifyToken, (req, res) => {
-    const { course_id, student_name } = req.body;
-    const sql = "SELECT id FROM registrations WHERE activity_id = ? AND student_name = ? LIMIT 1";
-    db.query(sql, [course_id, student_name], (err, data) => {
-        // حماية: لو الداتا بيز هنجت أو الليميت خلص، نرجع إنه مش مشترك عشان الصفحة تفتح
-        if (err) return res.json({ isSubscribed: false });
+    db.query("SELECT id FROM registrations WHERE activity_id = ? AND student_name = ? LIMIT 1", [req.body.course_id, req.body.student_name], (err, data) => {
+        if (err) return res.json({ isSubscribed: false }); 
         res.json({ isSubscribed: data?.length > 0 });
     });
 });
 
 app.post('/api/subscribe', verifyToken, (req, res) => {
-    const { course_id, student_name, student_email } = req.body;
-    db.query("INSERT INTO registrations (activity_id, student_name, student_email) VALUES (?, ?, ?)", 
-        [course_id, student_name, student_email], (err) => {
-            if(err) return res.status(500).json({message: "Error"});
-            res.json({ status: "Success" });
-        }
-    );
+    db.query("INSERT INTO registrations (activity_id, student_name, student_email) VALUES (?, ?, ?)", [req.body.course_id, req.body.student_name, req.body.student_email], () => res.json({ status: "Success" }));
 });
 
 // ==========================================
-// 🌍 Community APIs
+// 🌍 Community APIs (Optimized JOINs)
 // ==========================================
 
 app.get('/api/posts', verifyToken, (req, res) => {
@@ -213,14 +176,12 @@ app.get('/api/posts', verifyToken, (req, res) => {
 
 app.post('/api/posts/add', verifyToken, upload.single('image'), (req, res) => {
     const { user_id, user_name, user_role, user_avatar, content } = req.body;
-    const img = req.file ? req.file.path : null;
-    db.query("INSERT INTO posts (user_id, user_name, user_role, user_avatar, content, post_image) VALUES (?,?,?,?,?,?)",
-        [user_id, user_name, user_role, user_avatar, content, img], () => res.json({ status: "Success" }));
+    db.query("INSERT INTO posts (user_id, user_name, user_role, user_avatar, content, post_image) VALUES (?,?,?,?,?,?)", [user_id, user_name, user_role, user_avatar, content, req.file?.path || null], () => res.json({ status: "Success" }));
 });
 
 app.post('/api/posts/react', verifyToken, (req, res) => {
     const { post_id, user_id, reaction_type } = req.body;
-    db.query("SELECT name, profile_pic FROM users WHERE id=?", [user_id], (err, u) => {
+    db.query("SELECT name, profile_pic FROM users WHERE id=? LIMIT 1", [user_id], (err, u) => {
         if (err || !u || u.length === 0) return res.json({status:"Fail"});
         db.query("SELECT * FROM reactions WHERE post_id=? AND user_id=? LIMIT 1", [post_id, user_id], (err, data) => {
             if (data?.length > 0) {
@@ -238,128 +199,68 @@ app.post('/api/posts/react', verifyToken, (req, res) => {
     });
 });
 
-app.get('/api/reactions', verifyToken, (req, res) => {
-    db.query("SELECT * FROM reactions", (err, data) => res.json(data || []));
-});
-
-app.delete('/api/posts/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM posts WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
+app.get('/api/reactions', verifyToken, (req, res) => db.query("SELECT * FROM reactions", (err, data) => res.json(data || [])));
+app.delete('/api/posts/delete/:id', verifyToken, (req, res) => db.query("DELETE FROM posts WHERE id = ?", [req.params.id], () => res.json({ status: "Deleted" })));
 
 // ==========================================
 // 💬 Comments APIs
 // ==========================================
 
-app.get('/api/comments/:postId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM comments WHERE post_id=? ORDER BY id ASC", [req.params.postId], (err, data) => res.json(data || []));
-});
-
-app.get('/api/comments/course/:courseId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM comments WHERE course_id=? ORDER BY created_at ASC", [req.params.courseId], (err, data) => res.json(data || []));
-});
-
+app.get('/api/comments/:postId', verifyToken, (req, res) => db.query("SELECT * FROM comments WHERE post_id=? ORDER BY id ASC", [req.params.postId], (err, data) => res.json(data || [])));
+app.get('/api/comments/course/:courseId', verifyToken, (req, res) => db.query("SELECT * FROM comments WHERE course_id=? ORDER BY created_at ASC", [req.params.courseId], (err, data) => res.json(data || [])));
 app.post('/api/comments/add', verifyToken, (req, res) => {
     const { post_id, course_id, user_id, user_name, user_avatar, comment_text } = req.body;
-    const uid = user_id || req.user.id;
     const sql = course_id ? "INSERT INTO comments (course_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)" : "INSERT INTO comments (post_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)";
-    db.query(sql, [course_id || post_id, uid, user_name, user_avatar, comment_text], (err) => res.json({ status: err ? "Fail" : "Success" }));
+    db.query(sql, [course_id || post_id, user_id || req.user.id, user_name, user_avatar, comment_text], (err) => res.json({ status: err ? "Fail" : "Success" }));
 });
 
 // ==========================================
 // 🎓 Activities & Courses
 // ==========================================
 
-app.get('/api/activities/all', verifyToken, (req, res) => {
-    const sql = `SELECT activities.*, (SELECT COUNT(*) FROM registrations WHERE activity_id = activities.id) as registered_count FROM activities ORDER BY id DESC`;
-    db.query(sql, (err, data) => res.json(data || []));
-});
-
+app.get('/api/activities/all', verifyToken, (req, res) => db.query(`SELECT activities.*, (SELECT COUNT(*) FROM registrations WHERE activity_id = activities.id) as registered_count FROM activities ORDER BY id DESC`, (err, data) => res.json(data || [])));
 app.post('/api/activities/add', verifyToken, upload.single('material'), (req, res) => {
     const { title, description, type, instructor, event_date } = req.body;
-    db.query("INSERT INTO activities (title, description, type, instructor, event_date, file_path, created_by) VALUES (?,?,?,?,?,?,?)",
-    [title, description, type, instructor, event_date, req.file?.path, req.user.id], () => res.json({status:"Success"}));
+    db.query("INSERT INTO activities (title, description, type, instructor, event_date, file_path, created_by) VALUES (?,?,?,?,?,?,?)", [title, description, type, instructor, event_date, req.file?.path, req.user.id], () => res.json({status:"Success"}));
 });
 
 // ==========================================
 // 🎥 Videos & Progress
 // ==========================================
 
-app.get('/api/videos/:courseId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM course_videos WHERE course_id=? ORDER BY video_date ASC", [req.params.courseId], (err, data) => res.json(data || []));
-});
-
+app.get('/api/videos/:courseId', verifyToken, (req, res) => db.query("SELECT * FROM course_videos WHERE course_id=? ORDER BY video_date ASC", [req.params.courseId], (err, data) => res.json(data || [])));
 app.post('/api/videos/add', verifyToken, upload.single('video_file'), (req, res) => {
     const link = req.file ? req.file.path : req.body.video_link;
-    db.query("INSERT INTO course_videos (course_id, video_title, video_link, video_date) VALUES (?,?,?,?)", 
-    [req.body.course_id, req.body.video_title, link, req.body.video_date], (err, result) => res.json({status:"Success", id: result?.insertId}));
+    db.query("INSERT INTO course_videos (course_id, video_title, video_link, video_date) VALUES (?,?,?,?)", [req.body.course_id, req.body.video_title, link, req.body.video_date], (err, result) => res.json({status:"Success", id: result?.insertId}));
 });
 
-app.get('/api/schedule/all', verifyToken, (req, res) => {
-    const sql = `SELECT v.id, v.course_id, v.video_title, v.video_date, COALESCE(a.title, 'General') as course_title 
-                 FROM course_videos v LEFT JOIN activities a ON v.course_id = a.id 
-                 WHERE v.video_date IS NOT NULL ORDER BY v.video_date ASC`;
-    db.query(sql, (err, data) => res.json(data || []));
-});
+app.get('/api/schedule/all', verifyToken, (req, res) => db.query(`SELECT v.id, v.course_id, v.video_title, v.video_date, COALESCE(a.title, 'General') as course_title FROM course_videos v LEFT JOIN activities a ON v.course_id = a.id WHERE v.video_date IS NOT NULL ORDER BY v.video_date ASC`, (err, data) => res.json(data || [])));
 
 app.get('/api/progress/calculate/:courseId/:email', verifyToken, (req, res) => {
-    const { courseId, email } = req.params;
-    db.query("SELECT COUNT(*) as total FROM course_videos WHERE course_id=?", [courseId], (err, t) => {
+    db.query("SELECT COUNT(*) as total FROM course_videos WHERE course_id=?", [req.params.courseId], (err, t) => {
         if (err || !t || t[0].total === 0) return res.json({ percent: 0 });
-        db.query("SELECT COUNT(*) as watched FROM video_progress vp JOIN course_videos cv ON vp.video_id = cv.id WHERE vp.user_email=? AND cv.course_id=? AND vp.is_completed=1",
-            [email, courseId], (err, w) => res.json({ percent: Math.round(((w[0]?.watched || 0) / t[0].total) * 100) }));
+        db.query("SELECT COUNT(*) as watched FROM video_progress vp JOIN course_videos cv ON vp.video_id = cv.id WHERE vp.user_email=? AND cv.course_id=? AND vp.is_completed=1", [req.params.email, req.params.courseId], (err, w) => res.json({ percent: Math.round(((w[0]?.watched || 0) / t[0].total) * 100) }));
     });
 });
 
-app.post('/api/progress/mark-watched', verifyToken, (req, res) => {
-    db.query("INSERT IGNORE INTO video_progress (user_email, video_id, is_completed) VALUES (?, ?, 1)", [req.body.user_email, req.body.video_id], () => res.json({ status: "Success" }));
-});
+app.post('/api/progress/mark-watched', verifyToken, (req, res) => db.query("INSERT IGNORE INTO video_progress (user_email, video_id, is_completed) VALUES (?, ?, 1)", [req.body.user_email, req.body.video_id], () => res.json({ status: "Success" })));
 
 // ==========================================
 // 🛠️ Quizzes & Materials & Tasks
 // ==========================================
 
-app.get('/api/quiz/:courseId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM quiz_questions WHERE course_id = ?", [req.params.courseId], (err, data) => res.json(data || []));
-});
-
-app.post('/api/quiz/add', verifyToken, (req, res) => {
-    const sql = "INSERT INTO quiz_questions (course_id, question_text, option_a, option_b, option_c, option_d, correct_answer) VALUES (?,?,?,?,?,?,?)";
-    db.query(sql, [req.body.course_id, req.body.question_text, req.body.option_a, req.body.option_b, req.body.option_c, req.body.option_d, req.body.correct_answer], () => res.json({status:"Success"}));
-});
-
-app.post('/api/quiz/attempt', verifyToken, (req, res) => {
-    db.query("INSERT INTO quiz_attempts (user_email, course_id, score) VALUES (?,?,?)", [req.body.user_email, req.body.course_id, req.body.score], () => res.json({status:"Success"}));
-});
-
-app.get('/api/materials/:courseId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM course_materials WHERE course_id = ?", [req.params.courseId], (err, data) => res.json(data || []));
-});
-
-app.post('/api/materials/add', verifyToken, (req, res) => {
-    db.query("INSERT INTO course_materials (course_id, title, file_path) VALUES (?,?,?)", [req.body.course_id, req.body.title, req.body.link], () => res.json({status:"Success"}));
-});
-
-app.post('/api/tasks/submit', verifyToken, (req, res) => {
-    db.query("INSERT INTO task_submissions (user_id, course_id, video_id, task_link) VALUES (?,?,?,?)", 
-    [req.user.id, req.body.course_id, req.body.video_id, req.body.task_link], (err) => res.json({status: err ? "Fail" : "Success"}));
-});
-
-app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
-    const sql = `SELECT t.*, u.name as student_name, u.profile_pic FROM task_submissions t JOIN users u ON t.user_id = u.id WHERE t.video_id = ? ORDER BY t.submitted_at DESC`;
-    db.query(sql, [req.params.videoId], (err, data) => res.json(data || []));
-});
+app.get('/api/quiz/:courseId', verifyToken, (req, res) => db.query("SELECT * FROM quiz_questions WHERE course_id = ?", [req.params.courseId], (err, data) => res.json(data || [])));
+app.post('/api/quiz/attempt', verifyToken, (req, res) => db.query("INSERT INTO quiz_attempts (user_email, course_id, score) VALUES (?,?,?)", [req.body.user_email, req.body.course_id, req.body.score], () => res.json({status:"Success"})));
+app.get('/api/materials/:courseId', verifyToken, (req, res) => db.query("SELECT * FROM course_materials WHERE course_id = ?", [req.params.courseId], (err, data) => res.json(data || [])));
+app.post('/api/tasks/submit', verifyToken, (req, res) => db.query("INSERT INTO task_submissions (user_id, course_id, video_id, task_link) VALUES (?,?,?,?)", [req.user.id, req.body.course_id, req.body.video_id, req.body.task_link], (err) => res.json({status: err ? "Fail" : "Success"})));
 
 // ==========================================
-// 📊 Stats & Admin (Optimized One-Query Mode)
+// 📊 Stats & Admin (FIXED PENDING)
 // ==========================================
 
 app.get('/api/stats', verifyAdmin, (req, res) => {
-    const sql = `
-        SELECT 
-            (SELECT COUNT(*) FROM activities) as total_activities,
-            (SELECT COUNT(*) FROM registrations) as total_students,
-            (SELECT COUNT(*) FROM activities WHERE type='workshop') as total_workshops
-    `;
+    // استعلام مجمع سريع جداً لقتل حالة الـ Pending
+    const sql = `SELECT (SELECT COUNT(id) FROM activities) as total_activities, (SELECT COUNT(id) FROM registrations) as total_students, (SELECT COUNT(id) FROM activities WHERE type='workshop') as total_workshops`;
     db.query(sql, (err, data) => {
         if (err) return res.json({ total_activities: 0, total_students: 0, total_workshops: 0 });
         res.json(data[0] || { total_activities: 0, total_students: 0, total_workshops: 0 });
@@ -367,37 +268,18 @@ app.get('/api/stats', verifyAdmin, (req, res) => {
 });
 
 app.get('/api/leaderboard', verifyToken, (req, res) => {
-    const sql = `SELECT id, name, profile_pic, role, job_title,
-                (SELECT COUNT(*) FROM video_progress WHERE user_email = users.email AND is_completed=1) * 10 AS points
-                FROM users WHERE role NOT IN ('admin', 'company', 'instructor')
-                ORDER BY points DESC LIMIT 10`;
+    const sql = `SELECT id, name, profile_pic, role, job_title, (SELECT COUNT(*) FROM video_progress WHERE user_email = users.email AND is_completed=1) * 10 AS points FROM users WHERE role NOT IN ('admin', 'company', 'instructor') ORDER BY points DESC LIMIT 10`;
     db.query(sql, (err, data) => res.json(data || []));
 });
 
-app.get('/api/users', verifyAdmin, (req, res) => {
-    db.query("SELECT id, name, email, phone, role, profile_pic FROM users ORDER BY id DESC", (err, data) => res.json(data || []));
-});
-
-app.get('/api/team', verifyToken, (req, res) => {
-    db.query("SELECT name, role, profile_pic, email FROM users WHERE role IN ('admin', 'instructor') ORDER BY name ASC", (err, data) => res.json(data || []));
-});
-
-app.get('/api/notifications/:userId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 30", [req.params.userId], (err, data) => res.json(data || []));
-});
+app.get('/api/users', verifyAdmin, (req, res) => db.query("SELECT id, name, email, phone, role, profile_pic FROM users ORDER BY id DESC", (err, data) => res.json(data || [])));
+app.get('/api/notifications/:userId', verifyToken, (req, res) => db.query("SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 30", [req.params.userId], (err, data) => res.json(data || [])));
 
 // ==========================================
 // 🤝 Sponsors & Partners
 // ==========================================
 
-app.get('/api/public/sponsors', (req, res) => {
-    db.query("SELECT * FROM sponsors_partners", (err, data) => res.json(data || []));
-});
-
-app.post('/api/admin/sponsors/add', verifyAdmin, upload.single('logo'), (req, res) => {
-    const logo = req.file ? req.file.path : req.body.logo_url;
-    db.query("INSERT INTO sponsors_partners (name, type, logo_url, website_link) VALUES (?,?,?,?)", [req.body.name, req.body.type, logo, req.body.website_link], () => res.json({status:"Success"}));
-});
+app.get('/api/public/sponsors', (req, res) => db.query("SELECT * FROM sponsors_partners", (err, data) => res.json(data || [])));
 
 // ==========================================
 // 🚀 Start
