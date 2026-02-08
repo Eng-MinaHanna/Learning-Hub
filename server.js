@@ -67,7 +67,8 @@ const db = mysql.createPool({
     password: process.env.DB_PASS || '',
     database: process.env.DB_NAME || 'ieee_et5_db',
     charset: 'utf8mb4',
-    waitForConnections: true
+    waitForConnections: true,
+    queueLimit: 0
 });
 
 console.log('✅ Database Pool Ready 🚀');
@@ -182,8 +183,8 @@ app.get('/api/posts', verifyToken, (req, res) => {
                 (SELECT COUNT(*) FROM reactions WHERE reactions.post_id = posts.id) AS reaction_count 
                 FROM posts ORDER BY posts.id DESC`;
     db.query(sql, (err, data) => {
-        if (err) return res.status(500).json([]);
-        res.json(data);
+        if (err) return res.status(500).json({ status: "Fail", message: err.message });
+        res.json(data || []);
     });
 });
 
