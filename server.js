@@ -54,7 +54,7 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage });
 
 // ==========================================
-// 🗄️ Database Connection (Safe Pool for Free Tier)
+// 🗄️ Database Connection (Limit for Free Tier)
 // ==========================================
 const db = mysql.createPool({
     connectionLimit: 4, // ✅ نترك اتصالاً واحداً لـ DBeaver لضمان عدم حدوث Error 1226
@@ -160,10 +160,10 @@ app.post('/api/subscribe', verifyToken, (req, res) => {
 });
 
 // ==========================================
-// 🌍 Community APIs (Fixed Speed)
+// 🌍 Community APIs (Fixed for performance)
 // ==========================================
 app.get('/api/posts', verifyToken, (req, res) => {
-    // ✅ تحسين: استخدام JOIN مجمع لتسريع العملية ومنع الـ 500
+    // ✅ تحسين: استخدام JOIN مجمع لقتل الـ 500 في الصورة image_dea16d.png
     const sql = `SELECT p.*, COUNT(DISTINCT c.id) AS comment_count, COUNT(DISTINCT r.id) AS reaction_count 
                  FROM posts p LEFT JOIN comments c ON p.id = c.post_id LEFT JOIN reactions r ON p.id = r.post_id 
                  GROUP BY p.id ORDER BY p.id DESC`;
@@ -247,10 +247,10 @@ app.get('/api/materials/:courseId', verifyToken, (req, res) => db.query("SELECT 
 app.post('/api/tasks/submit', verifyToken, (req, res) => db.query("INSERT INTO task_submissions (user_id, course_id, video_id, task_link) VALUES (?,?,?,?)", [req.user.id, req.body.course_id, req.body.video_id, req.body.task_link], (err) => res.json({status: err ? "Fail" : "Success"})));
 
 // ==========================================
-// 📊 Stats & Team & Admin (Restored)
+// 📊 Stats & Team & Admin (Fix Pending in image_def7be.png)
 // ==========================================
 app.get('/api/stats', verifyAdmin, (req, res) => {
-    // ✅ استعلام مجمع طلقة واحدة لقتل حالة الـ Pending
+    // ✅ استعلام مجمع طلقة واحدة لقتل حالة الـ Pending للأبد
     const sql = `SELECT (SELECT COUNT(id) FROM activities) as total_activities, (SELECT COUNT(id) FROM registrations) as total_students, (SELECT COUNT(id) FROM activities WHERE type='workshop') as total_workshops`;
     db.query(sql, (err, data) => {
         if (err) return res.json({ total_activities: 0, total_students: 0, total_workshops: 0 });
@@ -260,7 +260,7 @@ app.get('/api/stats', verifyAdmin, (req, res) => {
 
 app.get('/api/leaderboard', verifyToken, (req, res) => db.query(`SELECT id, name, profile_pic, role, job_title, (SELECT COUNT(*) FROM video_progress WHERE user_email = users.email AND is_completed=1) * 10 AS points FROM users WHERE role NOT IN ('admin', 'company', 'instructor') ORDER BY points DESC LIMIT 10`, (err, data) => res.json(data || [])));
 app.get('/api/users', verifyAdmin, (req, res) => db.query("SELECT id, name, email, phone, role, profile_pic FROM users ORDER BY id DESC", (err, data) => res.json(data || [])));
-app.get('/api/team', verifyToken, (req, res) => db.query("SELECT name, role, profile_pic, email FROM users WHERE role IN ('admin', 'instructor') ORDER BY name ASC", (err, data) => res.json(data || []));
+app.get('/api/team', verifyToken, (req, res) => db.query("SELECT name, role, profile_pic, email FROM users WHERE role IN ('admin', 'instructor') ORDER BY name ASC", (err, data) => res.json(data || [])));
 app.get('/api/notifications/:userId', verifyToken, (req, res) => db.query("SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 30", [req.params.userId], (err, data) => res.json(data || [])));
 
 // ==========================================
@@ -273,6 +273,6 @@ app.post('/api/admin/sponsors/add', verifyAdmin, upload.single('logo'), (req, re
 // 🚀 Start
 // ==========================================
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Stable System Online on port ${PORT}...`));
+app.listen(PORT, () => console.log(`🚀 Final Stable System on port ${PORT}...`));
 
 module.exports = app;
