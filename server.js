@@ -21,7 +21,7 @@ const app = express();
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" }));
 
 app.use(cors({
-    origin: "https://learning-hub-web-six.vercel.app",
+    origin: ["https://learning-hub-web-six.vercel.app", "http://localhost:3000"], // Added localhost for testing
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
 }));
@@ -106,7 +106,7 @@ const reactionIcons = { like: '👍', love: '❤️', haha: '😂', wow: '😮',
 // 🔐 Auth APIs
 // ==========================================
 
-// تسجيل عادي (بيحتاج أكواد سرية للأدمن والمحاضر)
+// تسجيل عادي
 app.post('/api/register', async (req, res) => {
     const { name, email, phone, password, role, secretKey } = req.body;
     if (role === 'admin' && secretKey !== ADMIN_SECRET) return res.json({ status: "Fail", message: "Wrong Admin Code" });
@@ -122,7 +122,7 @@ app.post('/api/register', async (req, res) => {
     } catch (e) { res.status(500).json({ status: "Error" }); }
 });
 
-// ✅ (جديد) إضافة مستخدم/شركة بواسطة الأدمن (بدون كود سري)
+// إضافة مستخدم بواسطة الأدمن
 app.post('/api/admin/add-user', verifyAdmin, async (req, res) => {
     const { name, email, phone, password, role } = req.body;
     
@@ -130,7 +130,7 @@ app.post('/api/admin/add-user', verifyAdmin, async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
         const sql = "INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)";
         db.query(sql, [name, email, phone, hashedPassword, role], (err) => {
-            if (err) return res.json({ status: "Fail", message: "Email already exists" });
+            if (err) return res.json({ status: "Fail", message: "Email already exists or DB Error" });
             res.json({ status: "Success" });
         });
     } catch (e) { res.status(500).json({ status: "Error" }); }
@@ -151,33 +151,68 @@ app.post('/api/login', (req, res) => {
     });
 });
 
+// ✅✅✅ FIX HERE: The Correct Update API ✅✅✅
 app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => {
-    const { id, name, email, phone, oldPassword, newPassword, linkedin, cv_link, job_title } = req.body;
-    
-    if (req.user.id != id && req.user.role !== 'admin') return res.status(403).json({ status: "Fail" });
+    // We accept both 'password' and 'newPassword' to be compatible with frontend
+    const { id, name, email, phone, oldPassword, newPassword, password, linkedin, cv_link, job_title, role } = req.body;
+    const passToUpdate = newPassword || password; // Use whichever is sent
 
+    // Security Check: Only allow if it's the user themselves OR an Admin
+    if (req.user.id != id && req.user.role !== 'admin') {
+        return res.status(403).json({ status: "Fail", message: "Unauthorized" });
+    }
+
+    // 1. First, find the user
     db.query("SELECT * FROM users WHERE id = ?", [id], async (err, users) => {
-        if (err || users.length === 0) return res.json({ status: "Fail" });
-        
+        if (err) return res.status(500).json({ status: "Error", message: "Database Error" });
+        if (users.length === 0) return res.json({ status: "Fail", message: "User not found" });
+
         let finalPassword = users[0].password;
-        if (newPassword && newPassword.trim() !== "") {
-            const isMatch = await bcrypt.compare(oldPassword, users[0].password);
-            if (!isMatch) return res.json({ status: "Fail", message: "Wrong old password" });
-            finalPassword = await bcrypt.hash(newPassword, 10);
+        
+        // 2. Handle Password Update
+        if (passToUpdate && passToUpdate.trim() !== "") {
+            // If user is updating THEMSELVES (not admin), check old password
+            if (req.user.role !== 'admin') {
+                if (!oldPassword) return res.json({ status: "Fail", message: "Old password required" });
+                const isMatch = await bcrypt.compare(oldPassword, users[0].password);
+                if (!isMatch) return res.json({ status: "Fail", message: "Wrong old password" });
+            }
+            // If Admin or Old Password Correct -> Hash New Password
+            finalPassword = await bcrypt.hash(passToUpdate, 10);
         }
 
-        let sql = "UPDATE users SET name=?, email=?, phone=?, password=?, linkedin=?, cv_link=?, job_title=?";
-        let params = [name, email, phone, finalPassword, linkedin, cv_link, job_title];
+        // 3. Handle Role Update (Admin Only)
+        let finalRole = users[0].role;
+        if (req.user.role === 'admin' && role) {
+            finalRole = role;
+        }
+
+        // 4. Prepare Query
+        let sql = "UPDATE users SET name=?, email=?, phone=?, password=?, role=?, linkedin=?, cv_link=?, job_title=?";
+        let params = [name, email, phone, finalPassword, finalRole, linkedin, cv_link, job_title];
 
         if (req.file) {
             sql += ", profile_pic=?";
             params.push(req.file.path);
         }
 
-        sql += " WHERE id=?"; 
+        sql += " WHERE id=?";
         params.push(id);
 
-        db.query(sql, params, () => res.json({ status: "Success", newProfilePic: req.file?.path }));
+        // 5. Execute Update with Error Handling
+        db.query(sql, params, (updateErr, result) => {
+            if (updateErr) {
+                console.error("SQL Error:", updateErr); // Log error to console
+                return res.json({ status: "Fail", message: updateErr.sqlMessage || "Update Failed" });
+            }
+            
+            // Check if any row was actually updated
+            if (result.affectedRows === 0) {
+                return res.json({ status: "Fail", message: "No changes made or ID not found" });
+            }
+
+            res.json({ status: "Success", newProfilePic: req.file?.path });
+        });
     });
 });
 
@@ -308,6 +343,7 @@ app.delete('/api/comments/delete/:id', verifyToken, (req, res) => {
 });
 
 app.get('/api/users', verifyAdmin, (req, res) => {
+    // Return newest first
     db.query("SELECT id, name, email, phone, role, profile_pic, created_at FROM users ORDER BY created_at DESC", (err, data) => {
         if (err) return res.status(500).json({ status: "Error", message: "Database Error" });
         res.json(data || []); 
