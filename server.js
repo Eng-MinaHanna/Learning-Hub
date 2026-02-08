@@ -61,7 +61,7 @@ const upload = multer({ storage });
 // 🗄️ Database Connection (Improved Pool)
 // ==========================================
 const db = mysql.createPool({
-    connectionLimit: 20,
+    connectionLimit: 30,
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASS || '',
@@ -71,7 +71,7 @@ const db = mysql.createPool({
     queueLimit: 0
 });
 
-console.log('✅ Database Pool Ready 🚀');
+console.log('✅ Database Pool Ready for All Requests 🚀');
 
 // ==========================================
 // 🛡️ Middlewares
@@ -79,13 +79,16 @@ console.log('✅ Database Pool Ready 🚀');
 const verifyToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
-    if (!token) return res.status(403).json({ status: "Fail", message: "No Token" });
+    
+    if (!token) return res.status(401).json({ status: "Fail", message: "No Token Provided" });
 
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
-        if (err) return res.status(403).json({ status: "Fail", message: "Invalid Token" });
+        if (err) return res.status(401).json({ status: "Fail", message: "Invalid Token" });
         
         db.query("SELECT id, role, email, name FROM users WHERE id = ?", [decoded.id], (dbErr, data) => {
-            if (dbErr || data.length === 0) return res.status(401).json({ status: "Fail", message: "User no longer exists" });
+            if (dbErr || !data || data.length === 0) {
+                return res.status(401).json({ status: "Fail", message: "User Session Expired" });
+            }
             req.user = data[0]; 
             next();
         });
@@ -125,18 +128,6 @@ app.post('/api/register', async (req, res) => {
     } catch (e) { res.status(500).json({ status: "Error" }); }
 });
 
-app.post('/api/admin/add-user', verifyAdmin, async (req, res) => {
-    const { name, email, phone, password, role } = req.body;
-    try {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const sql = "INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)";
-        db.query(sql, [name, email, phone, hashedPassword, role], (err) => {
-            if (err) return res.json({ status: "Fail", message: "Error" });
-            res.json({ status: "Success" });
-        });
-    } catch (e) { res.status(500).json({ status: "Error" }); }
-});
-
 app.post('/api/login', (req, res) => {
     const { email, password } = req.body;
     db.query("SELECT * FROM users WHERE email = ?", [email], async (err, data) => {
@@ -151,7 +142,7 @@ app.post('/api/login', (req, res) => {
 });
 
 app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => {
-    const { id, name, email, phone, oldPassword, newPassword, linkedin, cv_link, job_title, role } = req.body;
+    const { id, name, email, phone, linkedin, cv_link, job_title, role, newPassword } = req.body;
     db.query("SELECT * FROM users WHERE id = ?", [id], async (err, users) => {
         if (err || users.length === 0) return res.status(500).json({ status: "Fail" });
         
@@ -173,6 +164,25 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
     });
 });
 
+// ✅ Fixed 404 for Subscription
+app.post('/api/check-subscription', verifyToken, (req, res) => {
+    const { course_id, student_name } = req.body;
+    db.query("SELECT * FROM registrations WHERE activity_id = ? AND student_name = ?", [course_id, student_name], (err, data) => {
+        if (err) return res.status(500).json({ status: "Error" });
+        res.json({ isSubscribed: data.length > 0 });
+    });
+});
+
+app.post('/api/subscribe', verifyToken, (req, res) => {
+    const { course_id, student_name, student_email } = req.body;
+    db.query("INSERT INTO registrations (activity_id, student_name, student_email) VALUES (?, ?, ?)", 
+        [course_id, student_name, student_email], (err) => {
+            if(err) return res.status(500).json({message: "Error"});
+            res.json({ status: "Success" });
+        }
+    );
+});
+
 // ==========================================
 // 🌍 Community APIs
 // ==========================================
@@ -183,8 +193,8 @@ app.get('/api/posts', verifyToken, (req, res) => {
                 (SELECT COUNT(*) FROM reactions WHERE reactions.post_id = posts.id) AS reaction_count 
                 FROM posts ORDER BY posts.id DESC`;
     db.query(sql, (err, data) => {
-        if (err) return res.status(500).json({ status: "Fail", message: err.message });
-        res.json(data || []);
+        if (err) return res.status(500).json([]);
+        res.json(data);
     });
 });
 
@@ -198,7 +208,7 @@ app.post('/api/posts/add', verifyToken, upload.single('image'), (req, res) => {
 app.post('/api/posts/react', verifyToken, (req, res) => {
     const { post_id, user_id, reaction_type } = req.body;
     db.query("SELECT name, profile_pic FROM users WHERE id=?", [user_id], (err, u) => {
-        if (err || u.length === 0) return res.json({status:"Fail"});
+        if (err || !u || u.length === 0) return res.json({status:"Fail"});
         db.query("SELECT * FROM reactions WHERE post_id=? AND user_id=?", [post_id, user_id], (err, data) => {
             if (data.length > 0) {
                 if (data[0].reaction_type === reaction_type) db.query("DELETE FROM reactions WHERE id=?", [data[0].id], () => res.json({ status: "Removed" }));
@@ -219,12 +229,20 @@ app.get('/api/reactions', verifyToken, (req, res) => {
     db.query("SELECT * FROM reactions", (err, data) => res.json(data || []));
 });
 
+app.delete('/api/posts/delete/:id', verifyToken, (req, res) => {
+    db.query("DELETE FROM posts WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
+});
+
 // ==========================================
 // 💬 Comments APIs
 // ==========================================
 
 app.get('/api/comments/:postId', verifyToken, (req, res) => {
     db.query("SELECT * FROM comments WHERE post_id=? ORDER BY id ASC", [req.params.postId], (err, data) => res.json(data || []));
+});
+
+app.get('/api/comments/course/:courseId', verifyToken, (req, res) => {
+    db.query("SELECT * FROM comments WHERE course_id=? ORDER BY created_at ASC", [req.params.courseId], (err, data) => res.json(data || []));
 });
 
 app.post('/api/comments/add', verifyToken, (req, res) => {
@@ -263,12 +281,21 @@ app.post('/api/videos/add', verifyToken, upload.single('video_file'), (req, res)
     [req.body.course_id, req.body.video_title, link, req.body.video_date], (err, result) => res.json({status:"Success", id: result?.insertId}));
 });
 
+// ✅ Fixed 404 for Schedule
+app.get('/api/schedule/all', verifyToken, (req, res) => {
+    const sql = `SELECT v.*, a.title as course_title 
+                 FROM course_videos v 
+                 JOIN activities a ON v.course_id = a.id 
+                 WHERE v.video_date IS NOT NULL ORDER BY v.video_date ASC`;
+    db.query(sql, (err, data) => res.json(data || []));
+});
+
 app.get('/api/progress/calculate/:courseId/:email', verifyToken, (req, res) => {
     const { courseId, email } = req.params;
     db.query("SELECT COUNT(*) as total FROM course_videos WHERE course_id=?", [courseId], (err, t) => {
-        if (!t || t[0].total === 0) return res.json({ percent: 0 });
+        if (err || !t || t[0].total === 0) return res.json({ percent: 0 });
         db.query("SELECT COUNT(*) as watched FROM video_progress vp JOIN course_videos cv ON vp.video_id = cv.id WHERE vp.user_email=? AND cv.course_id=? AND vp.is_completed=1",
-            [email, courseId], (err, w) => res.json({ percent: Math.round((w[0].watched / t[0].total) * 100) }));
+            [email, courseId], (err, w) => res.json({ percent: Math.round(((w[0]?.watched || 0) / t[0].total) * 100) }));
     });
 });
 
@@ -311,7 +338,7 @@ app.post('/api/tasks/submit', verifyToken, (req, res) => {
 });
 
 app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
-    const sql = `SELECT t.*, u.name as student_name, u.profile_pic FROM task_submissions t JOIN users u ON t.user_id = u.id WHERE t.video_id = ?`;
+    const sql = `SELECT t.*, u.name as student_name, u.profile_pic FROM task_submissions t JOIN users u ON t.user_id = u.id WHERE t.video_id = ? ORDER BY t.submitted_at DESC`;
     db.query(sql, [req.params.videoId], (err, data) => res.json(data || []));
 });
 
@@ -341,10 +368,10 @@ app.get('/api/team', verifyToken, (req, res) => {
 });
 
 // ==========================================
-// 🔔 Notifications (The Fixed 404 Route)
+// 🔔 Notifications (Fixed 404 Route)
 // ==========================================
 app.get('/api/notifications/:userId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 20", [req.params.userId], (err, data) => res.json(data || []));
+    db.query("SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 30", [req.params.userId], (err, data) => res.json(data || []));
 });
 
 // ==========================================
@@ -364,6 +391,6 @@ app.post('/api/admin/sponsors/add', verifyAdmin, upload.single('logo'), (req, re
 // 🚀 Start
 // ==========================================
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Full System Running on port ${PORT}...`));
+app.listen(PORT, () => console.log(`🚀 System Online on port ${PORT}...`));
 
 module.exports = app;
