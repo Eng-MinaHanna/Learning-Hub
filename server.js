@@ -56,10 +56,10 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage });
 
 // ==========================================
-// 🗄️ Database Connection (Robust Pool)
+// 🗄️ Database Connection (Fixed for Limit 5)
 // ==========================================
 const db = mysql.createPool({
-    connectionLimit: 50, 
+    connectionLimit: 4, // ✅ تم التعديل لـ 4 عشان الداتا بيز متطردكش (Error 1226)
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASS || '',
@@ -67,10 +67,10 @@ const db = mysql.createPool({
     charset: 'utf8mb4',
     waitForConnections: true,
     queueLimit: 0,
-    connectTimeout: 20000
+    connectTimeout: 30000
 });
 
-console.log('✅ Full Robust Database Pool Ready 🚀');
+console.log('✅ Robust Connection Pool Active (Safe Mode) 🚀');
 
 // ==========================================
 // 🛡️ Middlewares
@@ -176,10 +176,13 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
     });
 });
 
+// ✅ Fixed 500 for Subscription (Return false instead of crashing)
 app.post('/api/check-subscription', verifyToken, (req, res) => {
     const { course_id, student_name } = req.body;
-    db.query("SELECT id FROM registrations WHERE activity_id = ? AND student_name = ? LIMIT 1", [course_id, student_name], (err, data) => {
-        if (err) return res.status(500).json({ status: "Error" });
+    const sql = "SELECT id FROM registrations WHERE activity_id = ? AND student_name = ? LIMIT 1";
+    db.query(sql, [course_id, student_name], (err, data) => {
+        // حماية: لو الداتا بيز هنجت أو الليميت خلص، نرجع إنه مش مشترك عشان الصفحة تفتح
+        if (err) return res.json({ isSubscribed: false });
         res.json({ isSubscribed: data?.length > 0 });
     });
 });
@@ -358,7 +361,6 @@ app.get('/api/stats', verifyAdmin, (req, res) => {
             (SELECT COUNT(*) FROM activities WHERE type='workshop') as total_workshops
     `;
     db.query(sql, (err, data) => {
-        // حماية: لو الداتا بيز وقعت أو الجدول مش موجود، نرجع أصفار بدل 500
         if (err) return res.json({ total_activities: 0, total_students: 0, total_workshops: 0 });
         res.json(data[0] || { total_activities: 0, total_students: 0, total_workshops: 0 });
     });
