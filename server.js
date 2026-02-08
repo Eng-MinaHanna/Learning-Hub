@@ -54,10 +54,10 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage });
 
 // ==========================================
-// 🗄️ Database Connection (Optimized for Free Tier)
+// 🗄️ Database Connection (Safe Mode for Free Tiers)
 // ==========================================
 const db = mysql.createPool({
-    connectionLimit: 4, // ✅ المحافظة على اتصال واحد لـ DBeaver
+    connectionLimit: 4, // ✅ المحافظة على اتصال حر لـ DBeaver ومنع Error 1226
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASS || '',
@@ -68,7 +68,7 @@ const db = mysql.createPool({
     connectTimeout: 30000
 });
 
-console.log('✅ Robust Database Pool Ready 🚀');
+console.log('✅ Database Pool Ready in Safe Mode 🚀');
 
 // ==========================================
 // 🛡️ Middlewares
@@ -80,6 +80,7 @@ const verifyToken = (req, res, next) => {
 
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
         if (err) return res.status(401).json({ status: "Fail", message: "Invalid Token" });
+        // فحص سريع: لو الداتا بيز مشغولة، بنمشي باللي في التوكن لضمان عدم التعليق
         db.query("SELECT id, role, email, name FROM users WHERE id = ?", [decoded.id], (dbErr, data) => {
             if (dbErr || !data || data.length === 0) {
                 req.user = { id: decoded.id, role: decoded.role };
@@ -116,7 +117,7 @@ app.post('/api/register', async (req, res) => {
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         db.query("INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)", [name, email, phone, hashedPassword, role], (err) => {
-            if (err) return res.json({ status: "Fail", message: "Email already exists" });
+            if (err) return res.json({ status: "Fail", message: "Email exists" });
             res.json({ status: "Success" });
         });
     } catch (e) { res.status(500).json({ status: "Error" }); }
@@ -161,7 +162,7 @@ app.post('/api/subscribe', verifyToken, (req, res) => {
 });
 
 // ==========================================
-// 🌍 Community APIs (Optimized JOINs)
+// 🌍 Community APIs (Fixed Speed)
 // ==========================================
 
 app.get('/api/posts', verifyToken, (req, res) => {
@@ -255,11 +256,11 @@ app.get('/api/materials/:courseId', verifyToken, (req, res) => db.query("SELECT 
 app.post('/api/tasks/submit', verifyToken, (req, res) => db.query("INSERT INTO task_submissions (user_id, course_id, video_id, task_link) VALUES (?,?,?,?)", [req.user.id, req.body.course_id, req.body.video_id, req.body.task_link], (err) => res.json({status: err ? "Fail" : "Success"})));
 
 // ==========================================
-// 📊 Stats & Admin (FIXED PENDING)
+// 📊 Stats (KILL PENDING)
 // ==========================================
 
 app.get('/api/stats', verifyAdmin, (req, res) => {
-    // استعلام مجمع سريع جداً لقتل حالة الـ Pending
+    // استعلام مجمع طلقة واحدة لقتل حالة الـ Pending
     const sql = `SELECT (SELECT COUNT(id) FROM activities) as total_activities, (SELECT COUNT(id) FROM registrations) as total_students, (SELECT COUNT(id) FROM activities WHERE type='workshop') as total_workshops`;
     db.query(sql, (err, data) => {
         if (err) return res.json({ total_activities: 0, total_students: 0, total_workshops: 0 });
