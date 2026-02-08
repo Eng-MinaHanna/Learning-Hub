@@ -21,7 +21,7 @@ const app = express();
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" }));
 
 app.use(cors({
-    origin: ["https://learning-hub-web-six.vercel.app", "http://localhost:3000"], // Added localhost for testing
+    origin: ["https://learning-hub-web-six.vercel.app", "http://localhost:3000"], 
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
 }));
@@ -153,10 +153,8 @@ app.post('/api/login', (req, res) => {
 
 // ✅✅✅ FIX: Safe Update API (Prevents 500 Error) ✅✅✅
 app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => {
-    // استقبال البيانات (قد تكون بعض الحقول غير موجودة)
     const { id, name, email, phone, oldPassword, newPassword, password, linkedin, cv_link, job_title, role } = req.body;
     
-    // تحديد الباسورد الجديد (سواء تم إرساله باسم password أو newPassword)
     const passToUpdate = newPassword || password;
 
     // حماية: التأكد أن المستخدم يعدل بياناته هو فقط أو أنه أدمن
@@ -174,13 +172,11 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
             
             // 2. معالجة تغيير الباسورد
             if (passToUpdate && passToUpdate.trim() !== "") {
-                // لو المستخدم مش أدمن، لازم نتأكد من الباسورد القديم
                 if (req.user.role !== 'admin') {
                     if (!oldPassword) return res.json({ status: "Fail", message: "Old password required" });
                     const isMatch = await bcrypt.compare(oldPassword, users[0].password);
                     if (!isMatch) return res.json({ status: "Fail", message: "Wrong old password" });
                 }
-                // تشفير الباسورد الجديد
                 finalPassword = await bcrypt.hash(passToUpdate, 10);
             }
 
@@ -190,8 +186,7 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
                 finalRole = role;
             }
 
-            // 4. تجهيز القيم (هنا كان سبب المشكلة: تحويل undefined إلى null)
-            // 🔴 FIX: Convert undefined to null to prevent crash
+            // 4. تجهيز القيم
             const safeLinkedin = linkedin || null;
             const safeCv = cv_link || null;
             const safeJob = job_title || null;
@@ -210,8 +205,7 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
             // 5. تنفيذ التعديل
             db.query(sql, params, (updateErr, result) => {
                 if (updateErr) {
-                    console.error("SQL Error:", updateErr); // طباعة الخطأ في التيرمينال
-                    // لو الخطأ بسبب أن الأعمدة مش موجودة في الداتا بيز
+                    console.error("SQL Error:", updateErr);
                     if (updateErr.code === 'ER_BAD_FIELD_ERROR') {
                         return res.json({ status: "Fail", message: "Database column missing. Contact Admin." });
                     }
@@ -359,7 +353,6 @@ app.delete('/api/comments/delete/:id', verifyToken, (req, res) => {
 });
 
 app.get('/api/users', verifyAdmin, (req, res) => {
-    // Return newest first
     db.query("SELECT id, name, email, phone, role, profile_pic, created_at FROM users ORDER BY created_at DESC", (err, data) => {
         if (err) return res.status(500).json({ status: "Error", message: "Database Error" });
         res.json(data || []); 
@@ -543,16 +536,14 @@ app.get('/api/leaderboard', verifyToken, (req, res) => {
         COALESCE((SELECT SUM(score) FROM quiz_attempts qa WHERE qa.user_email = u.email), 0) AS quiz_points,
         (SELECT COUNT(*) FROM posts p WHERE p.user_id = u.id) * 5 AS post_points,
         (SELECT COUNT(*) FROM comments c WHERE c.user_id = u.id) * 2 AS comment_points
-        
-        FROM users u  -- ✅ THIS WAS MISSING
-        
+        FROM users u 
         WHERE u.role NOT IN ('admin', 'company', 'instructor') 
         ORDER BY (video_points + quiz_points + post_points + comment_points) DESC 
         LIMIT 10`;
 
     db.query(sql, (err, data) => {
         if (err) {
-            console.error(err); // Good to see the error in console
+            console.error(err); 
             return res.status(500).json({ status: "Error", message: "DB Error" });
         }
         res.json(data);
@@ -618,6 +609,7 @@ app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
         }
     });
 });
+
 // ==========================================
 // 🤝 Partners & Sponsors APIs
 // ==========================================
@@ -649,13 +641,13 @@ app.delete('/api/admin/sponsors/delete/:id', verifyAdmin, (req, res) => {
 });
 
 // 3. جلب الكل (متاح للجميع - للصفحة الرئيسية ولوحة التحكم)
-// لاحظ: شيلنا verifyToken عشان الصفحة الرئيسية (Landing Page) بتفتح من غير تسجيل دخول
 app.get('/api/public/sponsors', (req, res) => {
     db.query("SELECT * FROM sponsors_partners ORDER BY created_at DESC", (err, data) => {
         if (err) return res.status(500).json({ status: "Error" });
         res.json(data);
     });
 });
+
 // ==========================================
 // 🚀 Start
 // ==========================================
