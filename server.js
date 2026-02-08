@@ -56,7 +56,7 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage });
 
 // ==========================================
-// 🗄️ Database Connection (Improved Pool)
+// 🗄️ Database Connection (Robust Pool)
 // ==========================================
 const db = mysql.createPool({
     connectionLimit: 50, 
@@ -73,7 +73,7 @@ const db = mysql.createPool({
 console.log('✅ Full Robust Database Pool Ready 🚀');
 
 // ==========================================
-// 🛡️ Middlewares (Robust Auth)
+// 🛡️ Middlewares
 // ==========================================
 const verifyToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -86,7 +86,6 @@ const verifyToken = (req, res, next) => {
         
         db.query("SELECT id, role, email, name FROM users WHERE id = ?", [decoded.id], (dbErr, data) => {
             if (dbErr || !data || data.length === 0) {
-                // FALLBACK: لو الداتا بيز تقيلة، بنمشي باللي في التوكن لضمان عدم حدوث 401
                 req.user = { id: decoded.id, role: decoded.role };
                 return next();
             }
@@ -263,10 +262,6 @@ app.post('/api/comments/add', verifyToken, (req, res) => {
     db.query(sql, [course_id || post_id, uid, user_name, user_avatar, comment_text], (err) => res.json({ status: err ? "Fail" : "Success" }));
 });
 
-app.delete('/api/comments/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM comments WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
-
 // ==========================================
 // 🎓 Activities & Courses
 // ==========================================
@@ -282,19 +277,6 @@ app.post('/api/activities/add', verifyToken, upload.single('material'), (req, re
     [title, description, type, instructor, event_date, req.file?.path, req.user.id], () => res.json({status:"Success"}));
 });
 
-app.put('/api/activities/update/:id', verifyToken, upload.single('material'), (req, res) => {
-    const { title, description, instructor, event_date } = req.body;
-    let sql = "UPDATE activities SET title=?, description=?, instructor=?, event_date=?";
-    let params = [title, description, instructor, event_date];
-    if (req.file) { sql += ", file_path=?"; params.push(req.file.path); }
-    sql += " WHERE id=?"; params.push(req.params.id);
-    db.query(sql, params, (err) => res.json({ status: "Updated" }));
-});
-
-app.delete('/api/activities/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM activities WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
-
 // ==========================================
 // 🎥 Videos & Progress
 // ==========================================
@@ -307,16 +289,6 @@ app.post('/api/videos/add', verifyToken, upload.single('video_file'), (req, res)
     const link = req.file ? req.file.path : req.body.video_link;
     db.query("INSERT INTO course_videos (course_id, video_title, video_link, video_date) VALUES (?,?,?,?)", 
     [req.body.course_id, req.body.video_title, link, req.body.video_date], (err, result) => res.json({status:"Success", id: result?.insertId}));
-});
-
-app.put('/api/videos/update/:id', verifyToken, upload.single('video_file'), (req, res) => {
-    const link = req.file ? req.file.path : req.body.video_link;
-    db.query("UPDATE course_videos SET video_title=?, video_link=?, video_date=? WHERE id=?", 
-    [req.body.video_title, link, req.body.video_date, req.params.id], (err) => res.json({ status: "Updated" }));
-});
-
-app.delete('/api/videos/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM course_videos WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
 });
 
 app.get('/api/schedule/all', verifyToken, (req, res) => {
@@ -339,15 +311,6 @@ app.post('/api/progress/mark-watched', verifyToken, (req, res) => {
     db.query("INSERT IGNORE INTO video_progress (user_email, video_id, is_completed) VALUES (?, ?, 1)", [req.body.user_email, req.body.video_id], () => res.json({ status: "Success" }));
 });
 
-app.get('/api/progress/status/:courseId/:videoId/:email', verifyToken, (req, res) => {
-    const { courseId, videoId, email } = req.params;
-    db.query("SELECT * FROM video_progress WHERE user_email = ? AND video_id = ?", [email, videoId], (err, videoData) => {
-        db.query("SELECT COUNT(*) as count, MAX(score) as best_score FROM quiz_attempts WHERE user_email = ? AND course_id = ?", [email, courseId], (err, attemptData) => {
-            res.json({ isWatched: (videoData && videoData.length > 0), attempts: attemptData[0]?.count || 0, bestScore: attemptData[0]?.best_score || 0 });
-        });
-    });
-});
-
 // ==========================================
 // 🛠️ Quizzes & Materials & Tasks
 // ==========================================
@@ -359,10 +322,6 @@ app.get('/api/quiz/:courseId', verifyToken, (req, res) => {
 app.post('/api/quiz/add', verifyToken, (req, res) => {
     const sql = "INSERT INTO quiz_questions (course_id, question_text, option_a, option_b, option_c, option_d, correct_answer) VALUES (?,?,?,?,?,?,?)";
     db.query(sql, [req.body.course_id, req.body.question_text, req.body.option_a, req.body.option_b, req.body.option_c, req.body.option_d, req.body.correct_answer], () => res.json({status:"Success"}));
-});
-
-app.delete('/api/quiz/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM quiz_questions WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
 });
 
 app.post('/api/quiz/attempt', verifyToken, (req, res) => {
@@ -377,17 +336,9 @@ app.post('/api/materials/add', verifyToken, (req, res) => {
     db.query("INSERT INTO course_materials (course_id, title, file_path) VALUES (?,?,?)", [req.body.course_id, req.body.title, req.body.link], () => res.json({status:"Success"}));
 });
 
-app.delete('/api/materials/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM course_materials WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
-
 app.post('/api/tasks/submit', verifyToken, (req, res) => {
     db.query("INSERT INTO task_submissions (user_id, course_id, video_id, task_link) VALUES (?,?,?,?)", 
     [req.user.id, req.body.course_id, req.body.video_id, req.body.task_link], (err) => res.json({status: err ? "Fail" : "Success"}));
-});
-
-app.get('/api/tasks/my/:videoId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM task_submissions WHERE user_id = ? AND video_id = ? ORDER BY submitted_at DESC LIMIT 1", [req.user.id, req.params.videoId], (err, data) => res.json(data || []));
 });
 
 app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
@@ -407,8 +358,9 @@ app.get('/api/stats', verifyAdmin, (req, res) => {
             (SELECT COUNT(*) FROM activities WHERE type='workshop') as total_workshops
     `;
     db.query(sql, (err, data) => {
-        if (err) return res.status(500).json({ total_activities: 0, total_students: 0, total_workshops: 0 });
-        res.json(data[0]);
+        // حماية: لو الداتا بيز وقعت أو الجدول مش موجود، نرجع أصفار بدل 500
+        if (err) return res.json({ total_activities: 0, total_students: 0, total_workshops: 0 });
+        res.json(data[0] || { total_activities: 0, total_students: 0, total_workshops: 0 });
     });
 });
 
@@ -445,14 +397,10 @@ app.post('/api/admin/sponsors/add', verifyAdmin, upload.single('logo'), (req, re
     db.query("INSERT INTO sponsors_partners (name, type, logo_url, website_link) VALUES (?,?,?,?)", [req.body.name, req.body.type, logo, req.body.website_link], () => res.json({status:"Success"}));
 });
 
-app.delete('/api/admin/sponsors/delete/:id', verifyAdmin, (req, res) => {
-    db.query("DELETE FROM sponsors_partners WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
-
 // ==========================================
 // 🚀 Start
 // ==========================================
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 System Online on port ${PORT}...`));
+app.listen(PORT, () => console.log(`🚀 Final Robust System on port ${PORT}...`));
 
 module.exports = app;
