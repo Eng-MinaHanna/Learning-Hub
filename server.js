@@ -3,6 +3,8 @@ const express = require('express');
 const mysql = require('mysql');
 const cors = require('cors');
 const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
@@ -13,14 +15,16 @@ const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const app = express();
 
 // ==========================================
-// 🛡️ Security Config (حسب كودك)
+// 🛡️ Security Config
 // ==========================================
 app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" }));
+
 app.use(cors({
     origin: ["https://learning-hub-web-six.vercel.app", "http://localhost:3000", "https://learning-hub-et5.vercel.app"], 
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
 }));
+
 app.use(express.json());
 
 const limiter = rateLimit({
@@ -35,7 +39,7 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET;
 const INSTRUCTOR_SECRET = process.env.INSTRUCTOR_SECRET;
 
 // ==========================================
-// ☁️ Cloudinary Configuration (حسب كودك)
+// ☁️ Cloudinary Configuration
 // ==========================================
 cloudinary.config({
     cloud_name: 'ddgp71uok',
@@ -54,10 +58,10 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage });
 
 // ==========================================
-// 🗄️ Database Connection (الـ Pool الصحيح لمنع التقل)
+// 🗄️ Database Connection (Improved Pool)
 // ==========================================
 const db = mysql.createPool({
-    connectionLimit: 15,
+    connectionLimit: 20,
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASS || '',
@@ -66,14 +70,10 @@ const db = mysql.createPool({
     waitForConnections: true
 });
 
-// اختبار الاتصال
-db.getConnection((err, conn) => {
-    if (err) console.error('❌ DB Error:', err.message);
-    else { console.log('✅ Connected to DB Pool 🚀'); conn.release(); }
-});
+console.log('✅ Database Pool Ready 🚀');
 
 // ==========================================
-// 🛡️ Middlewares (نسخة كودك الأصلية)
+// 🛡️ Middlewares
 // ==========================================
 const verifyToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -82,8 +82,9 @@ const verifyToken = (req, res, next) => {
 
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
         if (err) return res.status(403).json({ status: "Fail", message: "Invalid Token" });
+        
         db.query("SELECT id, role, email, name FROM users WHERE id = ?", [decoded.id], (dbErr, data) => {
-            if (dbErr || data.length === 0) return res.status(401).json({ status: "Fail", message: "User not found" });
+            if (dbErr || data.length === 0) return res.status(401).json({ status: "Fail", message: "User no longer exists" });
             req.user = data[0]; 
             next();
         });
@@ -98,12 +99,14 @@ const verifyAdmin = (req, res, next) => {
 };
 
 const createNotification = (userId, senderName, senderAvatar, message, type) => {
-    db.query("INSERT INTO notifications (user_id, sender_name, sender_avatar, message, type) VALUES (?, ?, ?, ?, ?)", 
-    [userId, senderName, senderAvatar, message, type]);
+    const sql = "INSERT INTO notifications (user_id, sender_name, sender_avatar, message, type) VALUES (?, ?, ?, ?, ?)";
+    db.query(sql, [userId, senderName, senderAvatar, message, type]);
 };
 
+const reactionIcons = { like: '👍', love: '❤️', haha: '😂', wow: '😮', sad: '😢', angry: '😡' };
+
 // ==========================================
-// 🔐 Auth APIs (كل اللي كان في كودك)
+// 🔐 Auth APIs
 // ==========================================
 
 app.post('/api/register', async (req, res) => {
@@ -113,9 +116,21 @@ app.post('/api/register', async (req, res) => {
 
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
-        db.query("INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)", 
-        [name, email, phone, hashedPassword, role], (err) => {
-            if (err) return res.json({ status: "Fail", message: "Email exists" });
+        const sql = "INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)";
+        db.query(sql, [name, email, phone, hashedPassword, role], (err) => {
+            if (err) return res.json({ status: "Fail", message: "Email already exists" });
+            res.json({ status: "Success" });
+        });
+    } catch (e) { res.status(500).json({ status: "Error" }); }
+});
+
+app.post('/api/admin/add-user', verifyAdmin, async (req, res) => {
+    const { name, email, phone, password, role } = req.body;
+    try {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const sql = "INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)";
+        db.query(sql, [name, email, phone, hashedPassword, role], (err) => {
+            if (err) return res.json({ status: "Fail", message: "Error" });
             res.json({ status: "Success" });
         });
     } catch (e) { res.status(500).json({ status: "Error" }); }
@@ -134,13 +149,40 @@ app.post('/api/login', (req, res) => {
     });
 });
 
+app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => {
+    const { id, name, email, phone, oldPassword, newPassword, linkedin, cv_link, job_title, role } = req.body;
+    db.query("SELECT * FROM users WHERE id = ?", [id], async (err, users) => {
+        if (err || users.length === 0) return res.status(500).json({ status: "Fail" });
+        
+        let finalPassword = users[0].password;
+        if (newPassword && newPassword.trim() !== "") {
+            finalPassword = await bcrypt.hash(newPassword, 10);
+        }
+
+        let sql = "UPDATE users SET name=?, email=?, phone=?, password=?, role=?, linkedin=?, cv_link=?, job_title=?";
+        let params = [name, email, phone, finalPassword, role || users[0].role, linkedin, cv_link, job_title];
+
+        if (req.file) { sql += ", profile_pic=?"; params.push(req.file.path); }
+        sql += " WHERE id=?"; params.push(id);
+
+        db.query(sql, params, (err) => {
+            if (err) return res.json({ status: "Fail" });
+            res.json({ status: "Success", newProfilePic: req.file?.path });
+        });
+    });
+});
+
 // ==========================================
-// 🌍 Community & Posts (Fixed 500)
+// 🌍 Community APIs
 // ==========================================
 
 app.get('/api/posts', verifyToken, (req, res) => {
-    db.query("SELECT * FROM posts ORDER BY id DESC", (err, data) => {
-        if (err) return res.status(500).json({ error: err.message });
+    const sql = `SELECT posts.*, 
+                (SELECT COUNT(*) FROM comments WHERE comments.post_id = posts.id) AS comment_count, 
+                (SELECT COUNT(*) FROM reactions WHERE reactions.post_id = posts.id) AS reaction_count 
+                FROM posts ORDER BY posts.id DESC`;
+    db.query(sql, (err, data) => {
+        if (err) return res.status(500).json([]);
         res.json(data);
     });
 });
@@ -152,19 +194,24 @@ app.post('/api/posts/add', verifyToken, upload.single('image'), (req, res) => {
         [user_id, user_name, user_role, user_avatar, content, img], () => res.json({ status: "Success" }));
 });
 
-// ==========================================
-// 💬 Comments & Reactions
-// ==========================================
-
-app.get('/api/comments/:postId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM comments WHERE post_id=? ORDER BY created_at ASC", [req.params.postId], (err, data) => res.json(data));
-});
-
-app.post('/api/comments/add', verifyToken, (req, res) => {
-    const { post_id, course_id, user_id, user_name, user_avatar, comment_text } = req.body;
-    const uid = user_id || req.user.id;
-    const sql = course_id ? "INSERT INTO comments (course_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)" : "INSERT INTO comments (post_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)";
-    db.query(sql, [course_id || post_id, uid, user_name, user_avatar, comment_text], () => res.json({ status: "Success" }));
+app.post('/api/posts/react', verifyToken, (req, res) => {
+    const { post_id, user_id, reaction_type } = req.body;
+    db.query("SELECT name, profile_pic FROM users WHERE id=?", [user_id], (err, u) => {
+        if (err || u.length === 0) return res.json({status:"Fail"});
+        db.query("SELECT * FROM reactions WHERE post_id=? AND user_id=?", [post_id, user_id], (err, data) => {
+            if (data.length > 0) {
+                if (data[0].reaction_type === reaction_type) db.query("DELETE FROM reactions WHERE id=?", [data[0].id], () => res.json({ status: "Removed" }));
+                else db.query("UPDATE reactions SET reaction_type=? WHERE id=?", [reaction_type, data[0].id], () => res.json({ status: "Updated" }));
+            } else {
+                db.query("INSERT INTO reactions (post_id, user_id, reaction_type) VALUES (?,?,?)", [post_id, user_id, reaction_type], () => {
+                    db.query("SELECT user_id FROM posts WHERE id=?", [post_id], (err, p) => {
+                        if (p && p.length > 0 && p[0].user_id !== user_id) createNotification(p[0].user_id, u[0].name, u[0].profile_pic, `reacted ${reactionIcons[reaction_type]} to your post`, "react");
+                    });
+                    res.json({ status: "Added" });
+                });
+            }
+        });
+    });
 });
 
 app.get('/api/reactions', verifyToken, (req, res) => {
@@ -172,16 +219,47 @@ app.get('/api/reactions', verifyToken, (req, res) => {
 });
 
 // ==========================================
-// 🎓 Activities & Videos
+// 💬 Comments APIs
+// ==========================================
+
+app.get('/api/comments/:postId', verifyToken, (req, res) => {
+    db.query("SELECT * FROM comments WHERE post_id=? ORDER BY id ASC", [req.params.postId], (err, data) => res.json(data || []));
+});
+
+app.post('/api/comments/add', verifyToken, (req, res) => {
+    const { post_id, course_id, user_id, user_name, user_avatar, comment_text } = req.body;
+    const uid = user_id || req.user.id;
+    const sql = course_id ? "INSERT INTO comments (course_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)" : "INSERT INTO comments (post_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)";
+    db.query(sql, [course_id || post_id, uid, user_name, user_avatar, comment_text], (err) => res.json({ status: err ? "Fail" : "Success" }));
+});
+
+// ==========================================
+// 🎓 Activities & Courses
 // ==========================================
 
 app.get('/api/activities/all', verifyToken, (req, res) => {
-    db.query("SELECT * FROM activities ORDER BY id DESC", (err, data) => res.json(data));
+    const sql = `SELECT activities.*, (SELECT COUNT(*) FROM registrations WHERE activity_id = activities.id) as registered_count FROM activities ORDER BY id DESC`;
+    db.query(sql, (err, data) => res.json(data || []));
 });
 
-app.get('/api/stats', verifyAdmin, (req, res) => {
-    const sql = `SELECT (SELECT COUNT(*) FROM activities) as total_activities, (SELECT COUNT(*) FROM registrations) as total_students, (SELECT COUNT(*) FROM activities WHERE type='workshop') as total_workshops`;
-    db.query(sql, (err, data) => res.json(data[0]));
+app.post('/api/activities/add', verifyToken, upload.single('material'), (req, res) => {
+    const { title, description, type, instructor, event_date } = req.body;
+    db.query("INSERT INTO activities (title, description, type, instructor, event_date, file_path, created_by) VALUES (?,?,?,?,?,?,?)",
+    [title, description, type, instructor, event_date, req.file?.path, req.user.id], () => res.json({status:"Success"}));
+});
+
+// ==========================================
+// 🎥 Videos & Progress
+// ==========================================
+
+app.get('/api/videos/:courseId', verifyToken, (req, res) => {
+    db.query("SELECT * FROM course_videos WHERE course_id=? ORDER BY video_date ASC", [req.params.courseId], (err, data) => res.json(data || []));
+});
+
+app.post('/api/videos/add', verifyToken, upload.single('video_file'), (req, res) => {
+    const link = req.file ? req.file.path : req.body.video_link;
+    db.query("INSERT INTO course_videos (course_id, video_title, video_link, video_date) VALUES (?,?,?,?)", 
+    [req.body.course_id, req.body.video_title, link, req.body.video_date], (err, result) => res.json({status:"Success", id: result?.insertId}));
 });
 
 app.get('/api/progress/calculate/:courseId/:email', verifyToken, (req, res) => {
@@ -193,50 +271,98 @@ app.get('/api/progress/calculate/:courseId/:email', verifyToken, (req, res) => {
     });
 });
 
+app.post('/api/progress/mark-watched', verifyToken, (req, res) => {
+    db.query("INSERT IGNORE INTO video_progress (user_email, video_id, is_completed) VALUES (?, ?, 1)", [req.body.user_email, req.body.video_id], () => res.json({ status: "Success" }));
+});
+
 // ==========================================
-// 🛠️ Quizzes & Tasks (اللي أنت كنت خايف أنساهم)
+// 🛠️ Quizzes & Materials
 // ==========================================
+
+app.get('/api/quiz/:courseId', verifyToken, (req, res) => {
+    db.query("SELECT * FROM quiz_questions WHERE course_id = ?", [req.params.courseId], (err, data) => res.json(data || []));
+});
+
+app.post('/api/quiz/add', verifyToken, (req, res) => {
+    const sql = "INSERT INTO quiz_questions (course_id, question_text, option_a, option_b, option_c, option_d, correct_answer) VALUES (?,?,?,?,?,?,?)";
+    db.query(sql, [req.body.course_id, req.body.question_text, req.body.option_a, req.body.option_b, req.body.option_c, req.body.option_d, req.body.correct_answer], () => res.json({status:"Success"}));
+});
 
 app.post('/api/quiz/attempt', verifyToken, (req, res) => {
-    const { user_email, course_id, score } = req.body;
-    db.query("INSERT INTO quiz_attempts (user_email, course_id, score) VALUES (?, ?, ?)", [user_email, course_id, score], () => res.json({ status: "Success" }));
+    db.query("INSERT INTO quiz_attempts (user_email, course_id, score) VALUES (?,?,?)", [req.body.user_email, req.body.course_id, req.body.score], () => res.json({status:"Success"}));
 });
 
-app.post('/api/tasks/submit', verifyToken, (req, res) => {
-    const { course_id, video_id, task_link } = req.body;
-    db.query("INSERT INTO task_submissions (user_id, course_id, video_id, task_link) VALUES (?, ?, ?, ?)", 
-    [req.user.id, course_id, video_id, task_link], (err) => res.json({ status: err ? "Fail" : "Success" }));
+app.get('/api/materials/:courseId', verifyToken, (req, res) => {
+    db.query("SELECT * FROM course_materials WHERE course_id = ?", [req.params.courseId], (err, data) => res.json(data || []));
+});
+
+app.post('/api/materials/add', verifyToken, (req, res) => {
+    db.query("INSERT INTO course_materials (course_id, title, file_path) VALUES (?,?,?)", [req.body.course_id, req.body.title, req.body.link], () => res.json({status:"Success"}));
 });
 
 // ==========================================
-// 🤝 Sponsors (Fixed ORDER BY)
+// 📝 Tasks & Submissions
+// ==========================================
+
+app.post('/api/tasks/submit', verifyToken, (req, res) => {
+    db.query("INSERT INTO task_submissions (user_id, course_id, video_id, task_link) VALUES (?,?,?,?)", 
+    [req.user.id, req.body.course_id, req.body.video_id, req.body.task_link], (err) => res.json({status: err ? "Fail" : "Success"}));
+});
+
+app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
+    const sql = `SELECT t.*, u.name as student_name, u.profile_pic FROM task_submissions t JOIN users u ON t.user_id = u.id WHERE t.video_id = ?`;
+    db.query(sql, [req.params.videoId], (err, data) => res.json(data || []));
+});
+
+// ==========================================
+// 📊 Stats & Leaderboard
+// ==========================================
+
+app.get('/api/stats', verifyAdmin, (req, res) => {
+    const sql = `SELECT (SELECT COUNT(*) FROM activities) as total_activities, (SELECT COUNT(*) FROM registrations) as total_students, (SELECT COUNT(*) FROM activities WHERE type='workshop') as total_workshops`;
+    db.query(sql, (err, data) => res.json(data[0] || {}));
+});
+
+app.get('/api/leaderboard', verifyToken, (req, res) => {
+    const sql = `SELECT id, name, profile_pic, role, job_title,
+                (SELECT COUNT(*) FROM video_progress WHERE user_email = users.email AND is_completed=1) * 10 AS points
+                FROM users WHERE role NOT IN ('admin', 'company', 'instructor')
+                ORDER BY points DESC LIMIT 10`;
+    db.query(sql, (err, data) => res.json(data || []));
+});
+
+app.get('/api/users', verifyAdmin, (req, res) => {
+    db.query("SELECT id, name, email, phone, role, profile_pic FROM users ORDER BY id DESC", (err, data) => res.json(data || []));
+});
+
+app.get('/api/team', verifyToken, (req, res) => {
+    db.query("SELECT name, role, profile_pic, email FROM users WHERE role IN ('admin', 'instructor') ORDER BY name ASC", (err, data) => res.json(data || []));
+});
+
+// ==========================================
+// 🔔 Notifications (The Fixed 404 Route)
+// ==========================================
+app.get('/api/notifications/:userId', verifyToken, (req, res) => {
+    db.query("SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 20", [req.params.userId], (err, data) => res.json(data || []));
+});
+
+// ==========================================
+// 🤝 Sponsors & Partners
 // ==========================================
 
 app.get('/api/public/sponsors', (req, res) => {
     db.query("SELECT * FROM sponsors_partners", (err, data) => res.json(data || []));
 });
 
-// جلب المستخدمين للأدمن
-app.get('/api/users', verifyAdmin, (req, res) => {
-    db.query("SELECT id, name, email, role, profile_pic FROM users ORDER BY id DESC", (err, data) => {
-        if (err) return res.status(500).json([]);
-        res.json(data);
-    });
-});
-
-// Leaderboard
-app.get('/api/leaderboard', verifyToken, (req, res) => {
-    db.query("SELECT id, name, profile_pic, role FROM users WHERE role='student' LIMIT 10", (err, data) => res.json(data));
-});
-
-app.get('/api/team', verifyToken, (req, res) => {
-    db.query("SELECT name, role, profile_pic FROM users WHERE role IN ('admin', 'instructor')", (err, data) => res.json(data));
+app.post('/api/admin/sponsors/add', verifyAdmin, upload.single('logo'), (req, res) => {
+    const logo = req.file ? req.file.path : req.body.logo_url;
+    db.query("INSERT INTO sponsors_partners (name, type, logo_url, website_link) VALUES (?,?,?,?)", [req.body.name, req.body.type, logo, req.body.website_link], () => res.json({status:"Success"}));
 });
 
 // ==========================================
 // 🚀 Start
 // ==========================================
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Full System Running on port ${PORT}...`));
 
 module.exports = app;
