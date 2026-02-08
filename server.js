@@ -1,463 +1,325 @@
-require('dotenv').config();
-const express = require('express');
-const mysql = require('mysql');
-const cors = require('cors');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
+import React, { useEffect, useState } from 'react';
+import API from './api'; 
+import './App.css'; 
+import AddCourseModal from './AddCourseModal';
+import CourseDetailsModal from './CourseDetailsModal';
+import EditActivityModal from './EditActivityModal';
+import AuthPage from './AuthPage';
+import LandingPage from './LandingPage';
+import CalendarView from './CalendarView';
+import CommunityView from './CommunityView';
+import NotificationsModal from './NotificationsModal';
+import SponsorsPartnersBoard from './SponsorsPartnersBoard'; 
+import AdminUsersView from './AdminUsersView';
+import SettingsView from './SettingsView';
+import LeaderboardView from './LeaderboardView';
+import Sidebar from './Sidebar';
+import LoadingEffect from './LoadingEffect';
 
-const app = express();
+function App() {
+  const [user, setUser] = useState(() => {
+    try {
+      const savedUser = localStorage.getItem('ieee_user');
+      return savedUser ? JSON.parse(savedUser) : null;
+    } catch (e) { return null; }
+  });
 
-// ==========================================
-// 🛡️ Security Config
-// ==========================================
-app.use(helmet.crossOriginResourcePolicy({ policy: "cross-origin" }));
+  const [activities, setActivities] = useState([]); 
+  const [stats, setStats] = useState({ total_activities: 0, total_students: 0, total_workshops: 0 });
+  const [selectedCourse, setSelectedCourse] = useState(null);
+  const [editingActivity, setEditingActivity] = useState(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [currentView, setCurrentView] = useState(() => localStorage.getItem('activeView') || 'home');
+  const [progressData, setProgressData] = useState({});
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showAuth, setShowAuth] = useState(false);
+  const [loading, setLoading] = useState(true); 
+  const [syncError, setSyncError] = useState(false); // حالة جديدة للخطأ في المزامنة
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
 
-app.use(cors({
-    origin: ["https://learning-hub-web-six.vercel.app", "http://localhost:3000", "https://learning-hub-et5.vercel.app"], 
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true
-}));
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth < 1024;
+      setIsMobile(mobile);
+      if (!mobile) setIsSidebarOpen(true);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
-app.use(express.json());
+  useEffect(() => {
+    localStorage.setItem('activeView', currentView);
+    if (isMobile) setIsSidebarOpen(false);
+  }, [currentView, isMobile]);
 
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 2000, // رفع الحد لضمان عدم حظر طلبات الـ Progress الكثيرة
-    message: { status: "Fail", message: "Too many requests ⛔" }
-});
-app.use(limiter);
+  const handleOpenCourse = (course) => { 
+    setSelectedCourse(course); 
+    localStorage.setItem('activeCourseId', course?.id); 
+  };
 
-const JWT_SECRET = process.env.JWT_SECRET || "IEEE_ET5_SECRET_KEY_2026";
-const ADMIN_SECRET = process.env.ADMIN_SECRET;
-const INSTRUCTOR_SECRET = process.env.INSTRUCTOR_SECRET;
+  const handleCloseCourse = () => {
+    setSelectedCourse(null);
+    localStorage.removeItem('activeCourseId'); 
+    fetchData();
+  };
 
-// ==========================================
-// ☁️ Cloudinary Configuration
-// ==========================================
-cloudinary.config({
-    cloud_name: 'ddgp71uok',
-    api_key: '581267836978872',
-    api_secret: '-jLxAlPA7tQ587Xdd38nYJ0H4lA'
-});
+  const handleDelete = async (id) => {
+    if (window.confirm("⚠️ Confirm Delete?")) {
+      try { await API.delete(`/activities/delete/${id}`); fetchData(); } 
+      catch (err) { alert("Error deleting"); }
+    }
+  };
 
-const storage = new CloudinaryStorage({
-    cloudinary: cloudinary,
-    params: {
-        folder: 'ieee_et5_main',
-        resource_type: 'auto',
-        allowed_formats: ['jpg', 'png', 'jpeg', 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'zip', 'rar', 'mp4'],
-    },
-});
-const upload = multer({ storage });
+  const checkNotifications = async () => {
+    if (!user?.id) return;
+    try {
+      const res = await API.get(`/notifications/${user.id}`);
+      setUnreadCount(Array.isArray(res.data) ? res.data.filter(n => !n.is_read).length : 0);
+    } catch (e) { }
+  };
 
-// ==========================================
-// 🗄️ Database Connection (Robust Pool)
-// ==========================================
-const db = mysql.createPool({
-    connectionLimit: 50, // زيادة القنوات لأقصى حد لمنع الـ 401 الناتجة عن البطء
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASS || '',
-    database: process.env.DB_NAME || 'ieee_et5_db',
-    charset: 'utf8mb4',
-    waitForConnections: true,
-    queueLimit: 0,
-    connectTimeout: 20000 // زيادة وقت الانتظار
-});
+  const fetchData = async () => {
+    setLoading(true); 
+    setSyncError(false);
 
-console.log('✅ Full Database Pool Active 🚀');
-
-// ==========================================
-// 🛡️ Middlewares (Fixed for 401 Stability)
-// ==========================================
-const verifyToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    
-    if (!token) return res.status(401).json({ status: "Fail", message: "No Token" });
-
-    jwt.verify(token, JWT_SECRET, (err, decoded) => {
-        if (err) return res.status(401).json({ status: "Fail", message: "Invalid Token" });
-        
-        // تحسين الفحص ليكون صامد أمام ضغط الداتا بيز
-        db.query("SELECT id, role, email, name FROM users WHERE id = ?", [decoded.id], (dbErr, data) => {
-            if (dbErr) {
-                console.error("Auth DB Error:", dbErr.message);
-                // لو الداتا بيز هنجت، هنعتمد على الـ Token فقط مؤقتاً لتمشية الطلب
-                req.user = { id: decoded.id, role: decoded.role };
-                return next();
-            }
-            if (!data || data.length === 0) return res.status(401).json({ status: "Fail", message: "User Missing" });
-            req.user = data[0]; 
-            next();
-        });
-    });
-};
-
-const verifyAdmin = (req, res, next) => {
-    verifyToken(req, res, () => {
-        if (req.user && req.user.role === 'admin') next();
-        else res.status(403).json({ status: "Fail", message: "Admin Only" });
-    });
-};
-
-const createNotification = (userId, senderName, senderAvatar, message, type) => {
-    const sql = "INSERT INTO notifications (user_id, sender_name, sender_avatar, message, type) VALUES (?, ?, ?, ?, ?)";
-    db.query(sql, [userId, senderName, senderAvatar, message, type]);
-};
-
-const reactionIcons = { like: '👍', love: '❤️', haha: '😂', wow: '😮', sad: '😢', angry: '😡' };
-
-// ==========================================
-// 🔐 Auth APIs
-// ==========================================
-
-app.post('/api/register', async (req, res) => {
-    const { name, email, phone, password, role, secretKey } = req.body;
-    if (role === 'admin' && secretKey !== ADMIN_SECRET) return res.json({ status: "Fail", message: "Wrong Admin Code" });
-    if (role === 'instructor' && secretKey !== INSTRUCTOR_SECRET) return res.json({ status: "Fail", message: "Wrong Instructor Code" });
+    // 🕒 إعداد تايم أوت لمدة 10 ثواني
+    const timeoutId = setTimeout(() => {
+        setSyncError(true);
+        setLoading(false);
+    }, 10000); 
 
     try {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const sql = "INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)";
-        db.query(sql, [name, email, phone, hashedPassword, role], (err) => {
-            if (err) return res.json({ status: "Fail", message: "Email already exists" });
-            res.json({ status: "Success" });
+      const [actsRes, statsRes] = await Promise.all([
+        API.get('/activities/all').catch(() => ({ data: [] })),
+        (user?.role === 'admin' ? API.get('/stats') : Promise.resolve({ data: null })).catch(() => ({ data: null })),
+        checkNotifications()
+      ]);
+
+      clearTimeout(timeoutId); // إلغاء التايم أوت لو الداتا جت بسرعة
+
+      const data = Array.isArray(actsRes.data) ? actsRes.data : [];
+      setActivities(data);
+
+      const totalTracks = data.length;
+      const totalWorkshops = data.filter(a => a.type?.toLowerCase() === 'workshop').length;
+
+      if (user?.role === 'admin' && statsRes.data) {
+        setStats({
+          total_activities: totalTracks,
+          total_workshops: totalWorkshops,
+          total_students: statsRes.data.total_students || 0
         });
-    } catch (e) { res.status(500).json({ status: "Error" }); }
-});
+      } else {
+        setStats({ total_activities: totalTracks, total_workshops: totalWorkshops, total_students: '150+' });
+      }
 
-app.post('/api/admin/add-user', verifyAdmin, async (req, res) => {
-    const { name, email, phone, password, role } = req.body;
-    try {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const sql = "INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)";
-        db.query(sql, [name, email, phone, hashedPassword, role], (err) => {
-            if (err) return res.json({ status: "Fail", message: "Error" });
-            res.json({ status: "Success" });
-        });
-    } catch (e) { res.status(500).json({ status: "Error" }); }
-});
+      if (user?.email && user.role !== 'company' && data.length > 0) {
+        const progressPromises = data.map(course => 
+           API.get(`/progress/calculate/${course.id}/${user.email}`)
+             .then(res => ({id: course.id, val: res.data?.percent || 0}))
+             .catch(() => ({id: course.id, val: 0}))
+        );
+        const results = await Promise.all(progressPromises);
+        const newProgress = {};
+        results.forEach(r => { newProgress[r.id] = r.val });
+        setProgressData(newProgress);
+      }
 
-app.post('/api/login', (req, res) => {
-    const { email, password } = req.body;
-    db.query("SELECT * FROM users WHERE email = ?", [email], async (err, data) => {
-        if (err || data.length === 0) return res.json({ status: "Fail", message: "Invalid Credentials" });
-        const isMatch = await bcrypt.compare(password, data[0].password);
-        if (isMatch) {
-            const token = jwt.sign({ id: data[0].id, role: data[0].role }, JWT_SECRET, { expiresIn: '7d' });
-            const { password: _, ...user } = data[0];
-            res.json({ status: "Success", user, token });
-        } else { res.json({ status: "Fail", message: "Wrong Password" }); }
-    });
-});
+    } catch (err) {
+      console.error("Global Fetch Error", err);
+      setSyncError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => {
-    const { id, name, email, phone, linkedin, cv_link, job_title, role, newPassword } = req.body;
-    db.query("SELECT * FROM users WHERE id = ?", [id], async (err, users) => {
-        if (err || users.length === 0) return res.status(500).json({ status: "Fail" });
-        
-        let finalPassword = users[0].password;
-        if (newPassword && newPassword.trim() !== "") {
-            finalPassword = await bcrypt.hash(newPassword, 10);
-        }
+  useEffect(() => { 
+    if (user) fetchData(); 
+    else setLoading(false);
+  }, [user?.id]);
 
-        let sql = "UPDATE users SET name=?, email=?, phone=?, password=?, role=?, linkedin=?, cv_link=?, job_title=?";
-        let params = [name, email, phone, finalPassword, role || users[0].role, linkedin, cv_link, job_title];
+  const handleLogout = () => { setUser(null); localStorage.clear(); setCurrentView('home'); };
 
-        if (req.file) { sql += ", profile_pic=?"; params.push(req.file.path); }
-        sql += " WHERE id=?"; params.push(id);
-
-        db.query(sql, params, (err) => {
-            if (err) return res.json({ status: "Fail" });
-            res.json({ status: "Success", newProfilePic: req.file?.path });
-        });
-    });
-});
-
-app.post('/api/check-subscription', verifyToken, (req, res) => {
-    const { course_id, student_name } = req.body;
-    db.query("SELECT * FROM registrations WHERE activity_id = ? AND student_name = ?", [course_id, student_name], (err, data) => {
-        if (err) return res.status(500).json({ status: "Error" });
-        res.json({ isSubscribed: data.length > 0 });
-    });
-});
-
-app.post('/api/subscribe', verifyToken, (req, res) => {
-    const { course_id, student_name, student_email } = req.body;
-    db.query("INSERT INTO registrations (activity_id, student_name, student_email) VALUES (?, ?, ?)", 
-        [course_id, student_name, student_email], (err) => {
-            if(err) return res.status(500).json({message: "Error"});
-            res.json({ status: "Success" });
-        }
+  // 1. شاشة تسجيل الدخول
+  if (!user && !loading) {
+    return (
+      <div style={styles.appContainer}>
+        <div style={styles.backgroundGrid}></div>
+        {showAuth ? <AuthPage onLogin={(u) => {setUser(u); setShowAuth(false);}} /> : <LandingPage user={user} onGetStarted={() => setShowAuth(true)} />}
+      </div>
     );
-});
+  }
 
-// ==========================================
-// 🌍 Community APIs
-// ==========================================
+  // 2. نافذة الخطأ في حالة فشل المزامنة (Timeout)
+  if (syncError) {
+      return (
+          <div style={styles.loadingContainer}>
+              <div style={styles.errorBox}>
+                  <h2 style={{color: '#ff4d4d'}}>⚠️ Connection Timeout</h2>
+                  <p style={{margin: '15px 0', color: '#94a3b8'}}>
+                    The server is taking too long to respond. There might be a maintenance or network issue.
+                  </p>
+                  <p style={{fontSize: '0.9rem', color: '#64748b'}}>Please wait a moment or contact our <b>IEEE Officers</b> if the issue persists.</p>
+                  <button onClick={() => window.location.reload()} style={styles.continueBtn}>🔄 Retry Now</button>
+                  <button onClick={handleLogout} style={{...styles.continueBtn, background: 'transparent', color: '#fff', border: '1px solid #444', marginTop: '10px'}}>Logout</button>
+              </div>
+          </div>
+      );
+  }
 
-app.get('/api/posts', verifyToken, (req, res) => {
-    const sql = `SELECT posts.*, 
-                (SELECT COUNT(*) FROM comments WHERE comments.post_id = posts.id) AS comment_count, 
-                (SELECT COUNT(*) FROM reactions WHERE reactions.post_id = posts.id) AS reaction_count 
-                FROM posts ORDER BY posts.id DESC`;
-    db.query(sql, (err, data) => {
-        if (err) return res.status(500).json([]);
-        res.json(data);
-    });
-});
+  // 3. شاشة التحميل العادية
+  if (loading) {
+      return (
+          <div style={styles.loadingContainer}>
+              <LoadingEffect message="SYNCING WITH IEEE HUB..." />
+          </div>
+      );
+  }
 
-app.post('/api/posts/add', verifyToken, upload.single('image'), (req, res) => {
-    const { user_id, user_name, user_role, user_avatar, content } = req.body;
-    const img = req.file ? req.file.path : null;
-    db.query("INSERT INTO posts (user_id, user_name, user_role, user_avatar, content, post_image) VALUES (?,?,?,?,?,?)",
-        [user_id, user_name, user_role, user_avatar, content, img], () => res.json({ status: "Success" }));
-});
+  return (
+    <div style={styles.appContainer}>
+      <div style={styles.backgroundGrid}></div>
+      <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} style={{...styles.toggleBtn, left: (isSidebarOpen && !isMobile) ? '290px' : '20px'}}>
+        {isSidebarOpen ? '✕' : '☰'}
+      </button>
 
-app.post('/api/posts/react', verifyToken, (req, res) => {
-    const { post_id, user_id, reaction_type } = req.body;
-    db.query("SELECT name, profile_pic FROM users WHERE id=?", [user_id], (err, u) => {
-        if (err || !u || u.length === 0) return res.json({status:"Fail"});
-        db.query("SELECT * FROM reactions WHERE post_id=? AND user_id=?", [post_id, user_id], (err, data) => {
-            if (data.length > 0) {
-                if (data[0].reaction_type === reaction_type) db.query("DELETE FROM reactions WHERE id=?", [data[0].id], () => res.json({ status: "Removed" }));
-                else db.query("UPDATE reactions SET reaction_type=? WHERE id=?", [reaction_type, data[0].id], () => res.json({ status: "Updated" }));
-            } else {
-                db.query("INSERT INTO reactions (post_id, user_id, reaction_type) VALUES (?,?,?)", [post_id, user_id, reaction_type], () => {
-                    db.query("SELECT user_id FROM posts WHERE id=?", [post_id], (err, p) => {
-                        if (p && p.length > 0 && p[0].user_id !== user_id) createNotification(p[0].user_id, u[0].name, u[0].profile_pic, `reacted ${reactionIcons[reaction_type]} to your post`, "react");
-                    });
-                    res.json({ status: "Added" });
-                });
-            }
-        });
-    });
-});
+      <div style={{ display: 'flex', minHeight: '100vh', position: 'relative' }}>
+        <Sidebar isOpen={isSidebarOpen} isMobile={isMobile} user={user} currentView={currentView} onNavigate={setCurrentView} onLogout={handleLogout} />
 
-app.get('/api/reactions', verifyToken, (req, res) => {
-    db.query("SELECT * FROM reactions", (err, data) => res.json(data || []));
-});
+        <main style={{ ...styles.mainArea, marginLeft: (isSidebarOpen && !isMobile) ? '280px' : '0px', width: (isSidebarOpen && !isMobile) ? 'calc(100% - 280px)' : '100%' }}>
+          <div style={styles.pageHeader}>
+             {currentView === 'dashboard' && !selectedCourse && user.role !== 'company' && (
+                <h1 style={styles.welcomeText}>Hello, {user?.name?.split(' ')[0]}! ⚡</h1>
+             )}
+             {currentView === 'dashboard' && !selectedCourse && (
+               <div style={styles.searchContainer}>
+                  <input placeholder="Search tracks..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={styles.searchInput} />
+               </div>
+             )}
+          </div>
+          
+          {currentView === 'dashboard' && !selectedCourse && user.role !== 'company' && (
+            <div style={styles.contentFadeIn}>
+              <div style={styles.statsGrid}>
+                <DashboardCard title="Total Tracks" value={stats.total_activities} icon="📚" color="#4facfe" />
+                <DashboardCard title="Active Students" value={stats.total_students} icon="👨‍🎓" color="#43e97b" />
+                <DashboardCard title="Workshops" value={stats.total_workshops} icon="⚡" color="#fa709a" />
+              </div>
+              <div style={styles.coursesGrid}>
+                {activities.filter(a => a.title.toLowerCase().includes(searchTerm.toLowerCase())).map(act => (
+                  <div key={act.id} style={styles.courseCard}>
+                    <div style={styles.imageBox}>
+                       {act.file_path ? <img src={act.file_path} alt="C" style={styles.courseImg} /> : <div style={styles.coursePlaceholder}>IEEE</div>}
+                       <div style={styles.typeBadge}>{act.type}</div>
+                    </div>
+                    <div style={{ padding: '20px' }}>
+                      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px'}}>
+                          <h3 style={styles.courseTitle}>{act.title}</h3>
+                          {(user.role === 'admin' || (user.role === 'instructor' && act.created_by === user.id)) && (
+                            <div style={{display: 'flex', gap: '8px'}}>
+                                <button onClick={() => setEditingActivity(act)} style={styles.editBtnSmall}>✏️</button>
+                                <button onClick={() => handleDelete(act.id)} style={styles.deleteBtnSmall}>🗑️</button>
+                            </div>
+                          )}
+                      </div>
+                      <div style={styles.progressSection}>
+                          <div style={styles.progressText}>Progress: {progressData[act.id] || 0}%</div>
+                          <div style={styles.barBg}><div style={{...styles.barFill, width: `${progressData[act.id] || 0}%`}}></div></div>
+                      </div>
+                      <button onClick={() => handleOpenCourse(act)} style={styles.continueBtn}>Continue Learning ▶️</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
-app.delete('/api/posts/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM posts WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
+          {currentView === 'team' && <TeamView />}
+          {currentView === 'leaderboard' && <LeaderboardView />}
+          {currentView === 'home' && <LandingPage user={user} onGetStarted={() => setCurrentView('dashboard')} />}
+          {currentView === 'schedule' && <CalendarView onOpenCourse={handleOpenCourse} />}
+          {currentView === 'users' && <AdminUsersView currentUser={user} />}
+          {currentView === 'community' && <CommunityView />}
+          {currentView === 'sponsors' && user.role === 'admin' && <SponsorsPartnersBoard />}
+          {currentView === 'settings' && <SettingsView user={user} onUpdateUser={(u)=>setUser({...user,...u})} />}
+        </main>
+      </div>
 
-// ==========================================
-// 💬 Comments APIs
-// ==========================================
+      {showAddModal && <AddCourseModal onClose={() => setShowAddModal(false)} onAdd={fetchData} currentUser={user} />}
+      {selectedCourse && <CourseDetailsModal course={selectedCourse} onClose={handleCloseCourse} currentUser={user} />}
+      {editingActivity && <EditActivityModal activity={editingActivity} onClose={() => setEditingActivity(null)} onUpdate={fetchData} />}
+      
+      {(user.role === 'admin' || user.role === 'instructor') && currentView === 'dashboard' && (
+        <button onClick={() => setShowAddModal(true)} style={styles.fab}>+</button>
+      )}
+    </div>
+  );
+}
 
-app.get('/api/comments/:postId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM comments WHERE post_id=? ORDER BY id ASC", [req.params.postId], (err, data) => res.json(data || []));
-});
+const DashboardCard = ({ title, value, icon, color }) => (
+  <div style={{ ...styles.statCard, borderBottom: `3px solid ${color}` }}>
+    <div style={{ ...styles.iconCircle, backgroundColor: `${color}15`, color: color }}>{icon}</div>
+    <div>
+      <div style={styles.statValue}>{value}</div>
+      <div style={styles.statLabel}>{title}</div>
+    </div>
+  </div>
+);
 
-app.get('/api/comments/course/:courseId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM comments WHERE course_id=? ORDER BY created_at ASC", [req.params.courseId], (err, data) => res.json(data || []));
-});
+const TeamView = () => {
+    const [team, setTeam] = useState([]);
+    useEffect(() => { API.get('/team').then(res => setTeam(res.data)).catch(() => {}); }, []);
+    return (
+        <div style={{paddingBottom: '50px'}}>
+            <h2 style={{color: 'white', marginBottom: '40px', borderLeft: '5px solid #4facfe', paddingLeft: '15px', fontSize: '2rem'}}>🏆 Meet Our Heroes</h2>
+            <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '25px'}}>
+                {team.map((m, i) => (
+                    <div key={i} style={{background: 'rgba(30, 41, 59, 0.4)', padding: '25px', borderRadius: '16px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.05)'}}>
+                        <div style={{width: '90px', height: '90px', borderRadius: '50%', overflow: 'hidden', margin: '0 auto 15px', border: `3px solid #4facfe`}}>
+                            {m.profile_pic ? <img src={m.profile_pic} style={{width: '100%', height: '100%', objectFit: 'cover'}} alt="P" /> : <div style={{width:'100%', height:'100%', background:'#333', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'2rem'}}>{m.name?.charAt(0)}</div>}
+                        </div>
+                        <h3 style={{margin: '0 0 5px 0', color: 'white', fontSize: '1.1rem'}}>{m.name}</h3>
+                        <span style={{fontSize: '0.75rem', color: '#4facfe', background: 'rgba(79, 172, 254, 0.1)', padding: '4px 12px', borderRadius: '20px', fontWeight: 'bold'}}>{m.role?.toUpperCase()}</span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
 
-app.post('/api/comments/add', verifyToken, (req, res) => {
-    const { post_id, course_id, user_id, user_name, user_avatar, comment_text } = req.body;
-    const uid = user_id || req.user.id;
-    const sql = course_id ? "INSERT INTO comments (course_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)" : "INSERT INTO comments (post_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)";
-    db.query(sql, [course_id || post_id, uid, user_name, user_avatar, comment_text], (err) => res.json({ status: err ? "Fail" : "Success" }));
-});
+const styles = {
+  appContainer: { fontFamily: "'Cairo', sans-serif", backgroundColor: '#050810', color: 'white', minHeight: '100vh', position: 'relative', overflowX: 'hidden' },
+  backgroundGrid: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundImage: 'radial-gradient(rgba(79, 172, 254, 0.03) 2px, transparent 2px)', backgroundSize: '50px 50px', zIndex: 0 },
+  loadingContainer: { position: 'fixed', top: 0, left: 0, width: '100%', height: '100vh', backgroundColor: '#050810', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', zIndex: 9999, padding: '20px', textAlign: 'center' },
+  errorBox: { background: 'rgba(15, 23, 42, 0.8)', padding: '40px', borderRadius: '30px', border: '1px solid rgba(255,255,255,0.1)', maxWidth: '500px', backdropFilter: 'blur(10px)' },
+  mainArea: { padding: '40px 20px', transition: '0.4s cubic-bezier(0.4, 0, 0.2, 1)', position: 'relative', zIndex: 1, minHeight: '100vh' },
+  pageHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px', flexWrap: 'wrap', gap: '20px', paddingLeft: '70px', paddingTop: '10px' },
+  welcomeText: { color: 'white', margin: 0, fontSize: '1.6rem', fontWeight: '800' },
+  searchContainer: { background: 'rgba(15, 23, 42, 0.5)', padding: '10px 20px', borderRadius: '15px', border: '1px solid rgba(255,255,255,0.08)', width: '280px', backdropFilter: 'blur(10px)' },
+  searchInput: { background: 'transparent', border: 'none', color: 'white', outline: 'none', width: '100%', fontSize: '0.9rem' },
+  statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '25px', marginBottom: '50px' },
+  statCard: { background: 'rgba(15, 23, 42, 0.4)', padding: '25px', borderRadius: '24px', display: 'flex', alignItems: 'center', gap: '20px', border: '1px solid rgba(255,255,255,0.03)', backdropFilter: 'blur(10px)' },
+  iconCircle: { width: '55px', height: '55px', borderRadius: '15px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem' },
+  statValue: { fontSize: '1.8rem', fontWeight: '900', color: 'white' },
+  statLabel: { color: '#94a3b8', fontSize: '12px', fontWeight: '600' },
+  coursesGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '30px' },
+  courseCard: { backgroundColor: 'rgba(30, 41, 59, 0.2)', borderRadius: '24px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.05)', transition: '0.3s transform' },
+  imageBox: { position: 'relative', height: '180px' },
+  courseImg: { width: '100%', height: '100%', objectFit: 'cover' },
+  coursePlaceholder: { width: '100%', height: '100%', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4facfe', fontWeight: '900', fontSize: '2rem' },
+  typeBadge: { position: 'absolute', bottom: '15px', left: '15px', background: 'rgba(15, 23, 42, 0.8)', padding: '5px 12px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold', color: '#4facfe', backdropFilter: 'blur(5px)' },
+  courseTitle: { color: 'white', margin: 0, fontSize: '1.2rem', fontWeight: '700' },
+  progressSection: { margin: '20px 0' },
+  progressText: { fontSize: '11px', color: '#64748b', marginBottom: '8px' },
+  barBg: { width: '100%', height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '10px' },
+  barFill: { height: '100%', background: 'linear-gradient(90deg, #4facfe, #00f2fe)', borderRadius: '10px', transition: '1.5s ease' },
+  continueBtn: { width: '100%', padding: '14px', borderRadius: '14px', border: 'none', background: 'linear-gradient(90deg, #4facfe, #00f2fe)', color: '#050810', fontWeight: '900', cursor: 'pointer', transition: '0.3s' },
+  deleteBtnSmall: { width: '35px', height:'35px', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '10px', cursor: 'pointer', display:'flex', alignItems:'center', justifyContent:'center' },
+  editBtnSmall: { width: '35px', height:'35px', background: 'rgba(255, 255, 255, 0.05)', color: '#fff', border: '1px solid rgba(255, 255, 255, 0.1)', borderRadius: '10px', cursor: 'pointer', display:'flex', alignItems:'center', justifyContent:'center' },
+  toggleBtn: { position: 'fixed', zIndex: 3000, top: '20px', background: 'rgba(79, 172, 254, 0.9)', backdropFilter: 'blur(5px)', color: '#050810', border: 'none', borderRadius: '12px', width: '45px', height: '45px', cursor: 'pointer', fontSize: '1.4rem', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 15px rgba(79,172,254,0.3)', transition: '0.4s cubic-bezier(0.4, 0, 0.2, 1)' },
+  fab: { position: 'fixed', bottom: '30px', right: '30px', width: '65px', height: '65px', borderRadius: '22px', background: 'linear-gradient(135deg, #4facfe, #00f2fe)', color: '#050810', fontSize: '35px', border: 'none', cursor: 'pointer', boxShadow: '0 15px 30px rgba(79,172,254,0.5)', zIndex:100, fontWeight: 'bold' }
+};
 
-app.delete('/api/comments/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM comments WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
-
-// ==========================================
-// 🎓 Activities & Courses
-// ==========================================
-
-app.get('/api/activities/all', verifyToken, (req, res) => {
-    const sql = `SELECT activities.*, (SELECT COUNT(*) FROM registrations WHERE activity_id = activities.id) as registered_count FROM activities ORDER BY id DESC`;
-    db.query(sql, (err, data) => res.json(data || []));
-});
-
-app.post('/api/activities/add', verifyToken, upload.single('material'), (req, res) => {
-    const { title, description, type, instructor, event_date } = req.body;
-    db.query("INSERT INTO activities (title, description, type, instructor, event_date, file_path, created_by) VALUES (?,?,?,?,?,?,?)",
-    [title, description, type, instructor, event_date, req.file?.path, req.user.id], () => res.json({status:"Success"}));
-});
-
-app.put('/api/activities/update/:id', verifyToken, upload.single('material'), (req, res) => {
-    const { title, description, instructor, event_date } = req.body;
-    let sql = "UPDATE activities SET title=?, description=?, instructor=?, event_date=?";
-    let params = [title, description, instructor, event_date];
-    if (req.file) { sql += ", file_path=?"; params.push(req.file.path); }
-    sql += " WHERE id=?"; params.push(req.params.id);
-    db.query(sql, params, (err) => res.json({ status: "Updated" }));
-});
-
-app.delete('/api/activities/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM activities WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
-
-// ==========================================
-// 🎥 Videos & Progress
-// ==========================================
-
-app.get('/api/videos/:courseId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM course_videos WHERE course_id=? ORDER BY video_date ASC", [req.params.courseId], (err, data) => res.json(data || []));
-});
-
-app.post('/api/videos/add', verifyToken, upload.single('video_file'), (req, res) => {
-    const link = req.file ? req.file.path : req.body.video_link;
-    db.query("INSERT INTO course_videos (course_id, video_title, video_link, video_date) VALUES (?,?,?,?)", 
-    [req.body.course_id, req.body.video_title, link, req.body.video_date], (err, result) => res.json({status:"Success", id: result?.insertId}));
-});
-
-app.put('/api/videos/update/:id', verifyToken, upload.single('video_file'), (req, res) => {
-    const link = req.file ? req.file.path : req.body.video_link;
-    db.query("UPDATE course_videos SET video_title=?, video_link=?, video_date=? WHERE id=?", 
-    [req.body.video_title, link, req.body.video_date, req.params.id], (err) => res.json({ status: "Updated" }));
-});
-
-app.delete('/api/videos/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM course_videos WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
-
-app.get('/api/schedule/all', verifyToken, (req, res) => {
-    const sql = `SELECT v.id, v.course_id, v.video_title, v.video_date, COALESCE(a.title, 'General') as course_title 
-                 FROM course_videos v LEFT JOIN activities a ON v.course_id = a.id 
-                 WHERE v.video_date IS NOT NULL ORDER BY v.video_date ASC`;
-    db.query(sql, (err, data) => res.json(data || []));
-});
-
-app.get('/api/progress/calculate/:courseId/:email', verifyToken, (req, res) => {
-    const { courseId, email } = req.params;
-    db.query("SELECT COUNT(*) as total FROM course_videos WHERE course_id=?", [courseId], (err, t) => {
-        if (err || !t || t[0].total === 0) return res.json({ percent: 0 });
-        db.query("SELECT COUNT(*) as watched FROM video_progress vp JOIN course_videos cv ON vp.video_id = cv.id WHERE vp.user_email=? AND cv.course_id=? AND vp.is_completed=1",
-            [email, courseId], (err, w) => res.json({ percent: Math.round(((w[0]?.watched || 0) / t[0].total) * 100) }));
-    });
-});
-
-app.post('/api/progress/mark-watched', verifyToken, (req, res) => {
-    db.query("INSERT IGNORE INTO video_progress (user_email, video_id, is_completed) VALUES (?, ?, 1)", [req.body.user_email, req.body.video_id], () => res.json({ status: "Success" }));
-});
-
-app.get('/api/progress/status/:courseId/:videoId/:email', verifyToken, (req, res) => {
-    const { courseId, videoId, email } = req.params;
-    db.query("SELECT * FROM video_progress WHERE user_email = ? AND video_id = ?", [email, videoId], (err, videoData) => {
-        db.query("SELECT COUNT(*) as count, MAX(score) as best_score FROM quiz_attempts WHERE user_email = ? AND course_id = ?", [email, courseId], (err, attemptData) => {
-            res.json({ isWatched: (videoData && videoData.length > 0), attempts: attemptData[0]?.count || 0, bestScore: attemptData[0]?.best_score || 0 });
-        });
-    });
-});
-
-// ==========================================
-// 🛠️ Quizzes & Materials
-// ==========================================
-
-app.get('/api/quiz/:courseId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM quiz_questions WHERE course_id = ?", [req.params.courseId], (err, data) => res.json(data || []));
-});
-
-app.post('/api/quiz/add', verifyToken, (req, res) => {
-    const sql = "INSERT INTO quiz_questions (course_id, question_text, option_a, option_b, option_c, option_d, correct_answer) VALUES (?,?,?,?,?,?,?)";
-    db.query(sql, [req.body.course_id, req.body.question_text, req.body.option_a, req.body.option_b, req.body.option_c, req.body.option_d, req.body.correct_answer], () => res.json({status:"Success"}));
-});
-
-app.delete('/api/quiz/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM quiz_questions WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
-
-app.post('/api/quiz/attempt', verifyToken, (req, res) => {
-    db.query("INSERT INTO quiz_attempts (user_email, course_id, score) VALUES (?,?,?)", [req.body.user_email, req.body.course_id, req.body.score], () => res.json({status:"Success"}));
-});
-
-app.get('/api/materials/:courseId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM course_materials WHERE course_id = ?", [req.params.courseId], (err, data) => res.json(data || []));
-});
-
-app.post('/api/materials/add', verifyToken, (req, res) => {
-    db.query("INSERT INTO course_materials (course_id, title, file_path) VALUES (?,?,?)", [req.body.course_id, req.body.title, req.body.link], () => res.json({status:"Success"}));
-});
-
-app.delete('/api/materials/delete/:id', verifyToken, (req, res) => {
-    db.query("DELETE FROM course_materials WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
-
-// ==========================================
-// 📝 Tasks & Submissions
-// ==========================================
-
-app.post('/api/tasks/submit', verifyToken, (req, res) => {
-    db.query("INSERT INTO task_submissions (user_id, course_id, video_id, task_link) VALUES (?,?,?,?)", 
-    [req.user.id, req.body.course_id, req.body.video_id, req.body.task_link], (err) => res.json({status: err ? "Fail" : "Success"}));
-});
-
-app.get('/api/tasks/my/:videoId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM task_submissions WHERE user_id = ? AND video_id = ? ORDER BY submitted_at DESC LIMIT 1", [req.user.id, req.params.videoId], (err, data) => res.json(data || []));
-});
-
-app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
-    const sql = `SELECT t.*, u.name as student_name, u.profile_pic FROM task_submissions t JOIN users u ON t.user_id = u.id WHERE t.video_id = ? ORDER BY t.submitted_at DESC`;
-    db.query(sql, [req.params.videoId], (err, data) => res.json(data || []));
-});
-
-// ==========================================
-// 📊 Stats & Leaderboard
-// ==========================================
-
-app.get('/api/stats', verifyAdmin, (req, res) => {
-    const sql = `SELECT (SELECT COUNT(*) FROM activities) as total_activities, (SELECT COUNT(*) FROM registrations) as total_students, (SELECT COUNT(*) FROM activities WHERE type='workshop') as total_workshops`;
-    db.query(sql, (err, data) => res.json(data[0] || {}));
-});
-
-app.get('/api/leaderboard', verifyToken, (req, res) => {
-    const sql = `SELECT id, name, profile_pic, role, job_title,
-                (SELECT COUNT(*) FROM video_progress WHERE user_email = users.email AND is_completed=1) * 10 AS points
-                FROM users WHERE role NOT IN ('admin', 'company', 'instructor')
-                ORDER BY points DESC LIMIT 10`;
-    db.query(sql, (err, data) => res.json(data || []));
-});
-
-app.get('/api/users', verifyAdmin, (req, res) => {
-    db.query("SELECT id, name, email, phone, role, profile_pic FROM users ORDER BY id DESC", (err, data) => res.json(data || []));
-});
-
-app.get('/api/team', verifyToken, (req, res) => {
-    db.query("SELECT name, role, profile_pic, email FROM users WHERE role IN ('admin', 'instructor') ORDER BY name ASC", (err, data) => res.json(data || []));
-});
-
-// ==========================================
-// 🔔 Notifications (Fixed 404 Route)
-// ==========================================
-app.get('/api/notifications/:userId', verifyToken, (req, res) => {
-    db.query("SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 30", [req.params.userId], (err, data) => res.json(data || []));
-});
-
-// ==========================================
-// 🤝 Sponsors & Partners
-// ==========================================
-
-app.get('/api/public/sponsors', (req, res) => {
-    db.query("SELECT * FROM sponsors_partners", (err, data) => res.json(data || []));
-});
-
-app.post('/api/admin/sponsors/add', verifyAdmin, upload.single('logo'), (req, res) => {
-    const logo = req.file ? req.file.path : req.body.logo_url;
-    db.query("INSERT INTO sponsors_partners (name, type, logo_url, website_link) VALUES (?,?,?,?)", [req.body.name, req.body.type, logo, req.body.website_link], () => res.json({status:"Success"}));
-});
-
-app.delete('/api/admin/sponsors/delete/:id', verifyAdmin, (req, res) => {
-    db.query("DELETE FROM sponsors_partners WHERE id = ?", [req.params.id], (err) => res.json({ status: "Deleted" }));
-});
-
-// ==========================================
-// 🚀 Start
-// ==========================================
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 System Online on port ${PORT}...`));
-
-module.exports = app;
+export default App;
