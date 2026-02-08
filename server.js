@@ -137,27 +137,35 @@ app.post('/api/login', (req, res) => {
     });
 });
 
+// ✅ (تم التعديل) تحديث بيانات المستخدم لتشمل اللينكات
 app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => {
-    const { id, name, email, phone, oldPassword, newPassword } = req.body;
+    const { id, name, email, phone, oldPassword, newPassword, linkedin, cv_link, job_title } = req.body;
+    
+    // التحقق من الصلاحية
     if (req.user.id != id && req.user.role !== 'admin') return res.status(403).json({ status: "Fail" });
 
     db.query("SELECT * FROM users WHERE id = ?", [id], async (err, users) => {
         if (err || users.length === 0) return res.json({ status: "Fail" });
+        
         let finalPassword = users[0].password;
         if (newPassword && newPassword.trim() !== "") {
             const isMatch = await bcrypt.compare(oldPassword, users[0].password);
             if (!isMatch) return res.json({ status: "Fail", message: "Wrong old password" });
             finalPassword = await bcrypt.hash(newPassword, 10);
         }
-        let sql = "UPDATE users SET name=?, email=?, phone=?, password=?";
-        let params = [name, email, phone, finalPassword];
+
+        // ✅ تحديث الحقول الجديدة (linkedin, cv, job)
+        let sql = "UPDATE users SET name=?, email=?, phone=?, password=?, linkedin=?, cv_link=?, job_title=?";
+        let params = [name, email, phone, finalPassword, linkedin, cv_link, job_title];
 
         if (req.file) {
             sql += ", profile_pic=?";
             params.push(req.file.path);
         }
 
-        sql += " WHERE id=?"; params.push(id);
+        sql += " WHERE id=?"; 
+        params.push(id);
+
         db.query(sql, params, () => res.json({ status: "Success", newProfilePic: req.file?.path }));
     });
 });
@@ -231,7 +239,7 @@ app.get('/api/reactions', verifyToken, (req, res) => {
     });
 });
 
-// ✅ مسار حذف البوست (كان ناقص)
+// ✅ مسار حذف البوست
 app.delete('/api/posts/delete/:id', verifyToken, (req, res) => {
     const postId = req.params.id;
     const userId = req.user.id;
@@ -253,33 +261,29 @@ app.delete('/api/posts/delete/:id', verifyToken, (req, res) => {
 });
 
 // ---------------------------
-// 💬 Comments APIs (المحدثة)
+// 💬 Comments APIs
 // ---------------------------
 
-// جلب تعليقات البوستات
 app.get('/api/comments/:postId', verifyToken, (req, res) => {
     db.query("SELECT * FROM comments WHERE post_id=? ORDER BY created_at ASC", [req.params.postId], (err, data) => res.json(data));
 });
 
-// ✅ جلب تعليقات الكورس (للشات)
+// ✅ جلب تعليقات الكورس
 app.get('/api/comments/course/:courseId', verifyToken, (req, res) => {
     db.query("SELECT * FROM comments WHERE course_id=? ORDER BY created_at ASC", [req.params.courseId], (err, data) => res.json(data));
 });
 
-// ✅ إضافة تعليق (للبوست أو للكورس)
 app.post('/api/comments/add', verifyToken, (req, res) => {
     const { post_id, course_id, user_id, user_name, user_avatar, comment_text } = req.body;
     const uid = user_id || req.user.id;
 
     if (course_id) {
-        // شات الكورس
         const sql = "INSERT INTO comments (course_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)";
         db.query(sql, [course_id, uid, user_name, user_avatar, comment_text], (err) => {
             if (err) return res.status(500).json({ status: "Fail", message: err.message });
             res.json({ status: "Success" });
         });
     } else {
-        // تعليق مجتمع
         const sql = "INSERT INTO comments (post_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)";
         db.query(sql, [post_id, uid, user_name, user_avatar, comment_text], (err) => {
             if (err) return res.status(500).json({ status: "Fail", message: err.message });
@@ -424,7 +428,6 @@ app.post('/api/quiz/add', verifyToken, (req, res) => {
     db.query(sql, [req.body.course_id, req.body.question_text, req.body.option_a, req.body.option_b, req.body.option_c, req.body.option_d, req.body.correct_answer], () => res.json({ status: "Success" }));
 });
 
-// ✅ مسار حذف الأسئلة
 app.delete('/api/quiz/delete/:id', verifyToken, (req, res) => {
     db.query("DELETE FROM quiz_questions WHERE id = ?", [req.params.id], (err) => {
         if (err) return res.status(500).json({ status: "Fail" });
@@ -438,12 +441,11 @@ app.post('/api/quiz/attempt', verifyToken, (req, res) => {
     db.query(sql, [user_email, course_id, score], () => res.json({ status: "Success" }));
 });
 
-// ✅ مسارات الماتريال (تمت إضافة get و delete)
 app.get('/api/materials/:courseId', verifyToken, (req, res) => {
     db.query("SELECT * FROM course_materials WHERE course_id = ?", [req.params.courseId], (err, data) => res.json(data));
 });
 
-// ✅ (تعديل) إضافة ماتريال عن طريق لينك خارجي (Drive)
+// ✅ إضافة ماتريال عن طريق لينك خارجي (Drive)
 app.post('/api/materials/add', verifyToken, (req, res) => {
     const { course_id, title, link } = req.body; 
 
@@ -479,8 +481,9 @@ app.get('/api/stats', verifyAdmin, (req, res) => {
     db.query(sql, (err, data) => res.json(data[0]));
 });
 
+// ✅ (تم التعديل) إضافة اللينكات والـ Job Title للـ Leaderboard
 app.get('/api/leaderboard', verifyToken, (req, res) => {
-    const sql = `SELECT u.id, u.name, u.profile_pic, u.role,
+    const sql = `SELECT u.id, u.name, u.profile_pic, u.role, u.linkedin, u.cv_link, u.job_title,
         (SELECT COUNT(*) FROM video_progress vp WHERE vp.user_email = u.email AND vp.is_completed = 1) * 10 AS video_points,
         COALESCE((SELECT SUM(score) FROM quiz_attempts qa WHERE qa.user_email = u.email), 0) AS quiz_points,
         (SELECT COUNT(*) FROM posts p WHERE p.user_id = u.id) * 5 AS post_points,
@@ -489,9 +492,8 @@ app.get('/api/leaderboard', verifyToken, (req, res) => {
     db.query(sql, (err, data) => res.json(data));
 });
 
-// ✅ (جديد) جلب بيانات التيم (الأدمن والمحاضرين) لصفحة التقدير
+// ✅ جلب بيانات التيم (الأدمن والمحاضرين) لصفحة التقدير
 app.get('/api/team', verifyToken, (req, res) => {
-    // بنجيب الاسم، الصورة، والدور، ونرتبهم بحيث الأدمن يظهر الأول
     const sql = `SELECT name, role, profile_pic, email FROM users 
                  WHERE role IN ('admin', 'instructor') 
                  ORDER BY FIELD(role, 'admin', 'instructor'), name ASC`;
@@ -515,8 +517,6 @@ app.post('/api/tasks/submit', verifyToken, (req, res) => {
                  VALUES (?, ?, ?, ?) 
                  ON DUPLICATE KEY UPDATE task_link = VALUES(task_link), submitted_at = CURRENT_TIMESTAMP`;
     
-    // ملحوظة: لو الجدول مفيهوش Unique Key على (user_id, video_id)، السطر اللي فوق هيضيف صف جديد كل مرة.
-    // للأمان هنستخدم INSERT عادي ولو عايز تمنع التكرار ضيف Unique Index في الداتابيز.
     // هنا هنستخدم INSERT بسيط للتسهيل:
     db.query("INSERT INTO task_submissions (user_id, course_id, video_id, task_link) VALUES (?, ?, ?, ?)", 
         [user_id, course_id, video_id, task_link], 
@@ -543,7 +543,6 @@ app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
     const user_id = req.user.id;
     const user_role = req.user.role;
 
-    // الأول لازم نتأكد إن اللي بيطلب الداتا دي هو "الأدمن" أو "صاحب الكورس"
     const checkCourseSql = "SELECT a.created_by FROM activities a JOIN course_videos v ON a.id = v.course_id WHERE v.id = ?";
     
     db.query(checkCourseSql, [video_id], (err, courseData) => {
@@ -552,7 +551,6 @@ app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
         const instructorId = courseData[0].created_by;
 
         if (user_role === 'admin' || user_id === instructorId) {
-            // صلاحية مقبولة -> هات الداتا
             const sql = `SELECT t.*, u.name as student_name, u.profile_pic 
                          FROM task_submissions t 
                          JOIN users u ON t.user_id = u.id 
@@ -563,6 +561,7 @@ app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
         }
     });
 });
+
 // ==========================================
 // 🚀 Start
 // ==========================================
