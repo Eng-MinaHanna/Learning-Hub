@@ -162,7 +162,7 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
     });
 });
 
-// ✅ مسار الاشتراك (كان ناقص ومسبب 404)
+// ✅ مسار الاشتراك
 app.post('/api/check-subscription', verifyToken, (req, res) => {
     const { course_id, student_name } = req.body;
     db.query("SELECT * FROM registrations WHERE activity_id = ? AND student_name = ?", [course_id, student_name], (err, data) => {
@@ -231,11 +231,64 @@ app.get('/api/reactions', verifyToken, (req, res) => {
     });
 });
 
+// ✅ مسار حذف البوست (كان ناقص)
+app.delete('/api/posts/delete/:id', verifyToken, (req, res) => {
+    const postId = req.params.id;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    db.query("SELECT user_id FROM posts WHERE id = ?", [postId], (err, data) => {
+        if (err) return res.status(500).json({ status: "Error", message: "DB Error" });
+        if (data.length === 0) return res.status(404).json({ status: "Fail", message: "Post not found" });
+
+        if (data[0].user_id === userId || userRole === 'admin') {
+            db.query("DELETE FROM posts WHERE id = ?", [postId], (err) => {
+                if (err) return res.status(500).json({ status: "Error", message: "Deletion failed" });
+                res.json({ status: "Deleted" });
+            });
+        } else {
+            res.status(403).json({ status: "Fail", message: "Not authorized" });
+        }
+    });
+});
+
+// ---------------------------
+// 💬 Comments APIs (المحدثة)
+// ---------------------------
+
+// جلب تعليقات البوستات
 app.get('/api/comments/:postId', verifyToken, (req, res) => {
     db.query("SELECT * FROM comments WHERE post_id=? ORDER BY created_at ASC", [req.params.postId], (err, data) => res.json(data));
 });
 
-// ✅ مسار حذف الكومنتات (جديد)
+// ✅ جلب تعليقات الكورس (للشات)
+app.get('/api/comments/course/:courseId', verifyToken, (req, res) => {
+    db.query("SELECT * FROM comments WHERE course_id=? ORDER BY created_at ASC", [req.params.courseId], (err, data) => res.json(data));
+});
+
+// ✅ إضافة تعليق (للبوست أو للكورس)
+app.post('/api/comments/add', verifyToken, (req, res) => {
+    const { post_id, course_id, user_id, user_name, user_avatar, comment_text } = req.body;
+    const uid = user_id || req.user.id;
+
+    if (course_id) {
+        // شات الكورس
+        const sql = "INSERT INTO comments (course_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)";
+        db.query(sql, [course_id, uid, user_name, user_avatar, comment_text], (err) => {
+            if (err) return res.status(500).json({ status: "Fail", message: err.message });
+            res.json({ status: "Success" });
+        });
+    } else {
+        // تعليق مجتمع
+        const sql = "INSERT INTO comments (post_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)";
+        db.query(sql, [post_id, uid, user_name, user_avatar, comment_text], (err) => {
+            if (err) return res.status(500).json({ status: "Fail", message: err.message });
+            res.json({ status: "Success" });
+        });
+    }
+});
+
+// ✅ مسار حذف الكومنتات
 app.delete('/api/comments/delete/:id', verifyToken, (req, res) => {
     db.query("DELETE FROM comments WHERE id = ?", [req.params.id], (err) => {
         if (err) return res.status(500).json({ status: "Fail" });
@@ -250,39 +303,6 @@ app.get('/api/users', verifyAdmin, (req, res) => {
     });
 });
 
-app.post('/api/comments/add', verifyToken, (req, res) => {
-    const { post_id, course_id, user_id, user_name, user_avatar, comment_text } = req.body;
-    const targetId = post_id || course_id;
-    const uid = user_id || req.user.id;
-    const sql = "INSERT INTO comments (post_id, user_id, user_name, user_avatar, comment_text) VALUES (?,?,?,?,?)";
-    db.query(sql, [targetId, uid, user_name, user_avatar, comment_text], (err) => {
-        if (err) return res.status(500).json({ status: "Fail", message: err.message });
-        res.json({ status: "Success" });
-    });
-});
-// ✅ مسار حذف البوست (كان ناقص)
-app.delete('/api/posts/delete/:id', verifyToken, (req, res) => {
-    // التحقق إن اللي بيمسح هو صاحب البوست أو الأدمن
-    const postId = req.params.id;
-    const userId = req.user.id;
-    const userRole = req.user.role;
-
-    // الأول نجيب البوست عشان نتأكد من صاحبه
-    db.query("SELECT user_id FROM posts WHERE id = ?", [postId], (err, data) => {
-        if (err) return res.status(500).json({ status: "Error", message: "DB Error" });
-        if (data.length === 0) return res.status(404).json({ status: "Fail", message: "Post not found" });
-
-        // لو المستخدم هو صاحب البوست أو هو أدمن -> امسح
-        if (data[0].user_id === userId || userRole === 'admin') {
-            db.query("DELETE FROM posts WHERE id = ?", [postId], (err) => {
-                if (err) return res.status(500).json({ status: "Error", message: "Deletion failed" });
-                res.json({ status: "Deleted" });
-            });
-        } else {
-            res.status(403).json({ status: "Fail", message: "Not authorized" });
-        }
-    });
-});
 // ==========================================
 // 🎓 Activities & Courses
 // ==========================================
@@ -404,7 +424,7 @@ app.post('/api/quiz/add', verifyToken, (req, res) => {
     db.query(sql, [req.body.course_id, req.body.question_text, req.body.option_a, req.body.option_b, req.body.option_c, req.body.option_d, req.body.correct_answer], () => res.json({ status: "Success" }));
 });
 
-// ✅ مسار حذف الأسئلة (جديد)
+// ✅ مسار حذف الأسئلة
 app.delete('/api/quiz/delete/:id', verifyToken, (req, res) => {
     db.query("DELETE FROM quiz_questions WHERE id = ?", [req.params.id], (err) => {
         if (err) return res.status(500).json({ status: "Fail" });
@@ -425,14 +445,12 @@ app.get('/api/materials/:courseId', verifyToken, (req, res) => {
 
 // ✅ (تعديل) إضافة ماتريال عن طريق لينك خارجي (Drive)
 app.post('/api/materials/add', verifyToken, (req, res) => {
-    // نستقبل البيانات كـ JSON عادي مش FormData
     const { course_id, title, link } = req.body; 
 
     if (!course_id || !title || !link) {
         return res.status(400).json({ status: "Fail", message: "Missing fields" });
     }
 
-    // بنخزن اللينك مكان الـ file_path القديم
     db.query("INSERT INTO course_materials (course_id, title, file_path) VALUES (?, ?, ?)", 
         [course_id, title, link], 
         (err) => {
@@ -469,6 +487,18 @@ app.get('/api/leaderboard', verifyToken, (req, res) => {
         (SELECT COUNT(*) FROM comments c WHERE c.user_id = u.id) * 2 AS comment_points
         FROM users u WHERE u.role != 'admin' ORDER BY (video_points + quiz_points + post_points + comment_points) DESC LIMIT 10`;
     db.query(sql, (err, data) => res.json(data));
+});
+
+// ✅ (جديد) جلب بيانات التيم (الأدمن والمحاضرين) لصفحة التقدير
+app.get('/api/team', verifyToken, (req, res) => {
+    // بنجيب الاسم، الصورة، والدور، ونرتبهم بحيث الأدمن يظهر الأول
+    const sql = `SELECT name, role, profile_pic, email FROM users 
+                 WHERE role IN ('admin', 'instructor') 
+                 ORDER BY FIELD(role, 'admin', 'instructor'), name ASC`;
+    db.query(sql, (err, data) => {
+        if (err) return res.status(500).json({ status: "Error" });
+        res.json(data);
+    });
 });
 
 // ==========================================
