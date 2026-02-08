@@ -151,68 +151,84 @@ app.post('/api/login', (req, res) => {
     });
 });
 
-// ✅✅✅ FIX HERE: The Correct Update API ✅✅✅
+// ✅✅✅ FIX: Safe Update API (Prevents 500 Error) ✅✅✅
 app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => {
-    // We accept both 'password' and 'newPassword' to be compatible with frontend
+    // استقبال البيانات (قد تكون بعض الحقول غير موجودة)
     const { id, name, email, phone, oldPassword, newPassword, password, linkedin, cv_link, job_title, role } = req.body;
-    const passToUpdate = newPassword || password; // Use whichever is sent
+    
+    // تحديد الباسورد الجديد (سواء تم إرساله باسم password أو newPassword)
+    const passToUpdate = newPassword || password;
 
-    // Security Check: Only allow if it's the user themselves OR an Admin
+    // حماية: التأكد أن المستخدم يعدل بياناته هو فقط أو أنه أدمن
     if (req.user.id != id && req.user.role !== 'admin') {
         return res.status(403).json({ status: "Fail", message: "Unauthorized" });
     }
 
-    // 1. First, find the user
+    // 1. البحث عن المستخدم أولاً
     db.query("SELECT * FROM users WHERE id = ?", [id], async (err, users) => {
         if (err) return res.status(500).json({ status: "Error", message: "Database Error" });
         if (users.length === 0) return res.json({ status: "Fail", message: "User not found" });
 
-        let finalPassword = users[0].password;
-        
-        // 2. Handle Password Update
-        if (passToUpdate && passToUpdate.trim() !== "") {
-            // If user is updating THEMSELVES (not admin), check old password
-            if (req.user.role !== 'admin') {
-                if (!oldPassword) return res.json({ status: "Fail", message: "Old password required" });
-                const isMatch = await bcrypt.compare(oldPassword, users[0].password);
-                if (!isMatch) return res.json({ status: "Fail", message: "Wrong old password" });
-            }
-            // If Admin or Old Password Correct -> Hash New Password
-            finalPassword = await bcrypt.hash(passToUpdate, 10);
-        }
-
-        // 3. Handle Role Update (Admin Only)
-        let finalRole = users[0].role;
-        if (req.user.role === 'admin' && role) {
-            finalRole = role;
-        }
-
-        // 4. Prepare Query
-        let sql = "UPDATE users SET name=?, email=?, phone=?, password=?, role=?, linkedin=?, cv_link=?, job_title=?";
-        let params = [name, email, phone, finalPassword, finalRole, linkedin, cv_link, job_title];
-
-        if (req.file) {
-            sql += ", profile_pic=?";
-            params.push(req.file.path);
-        }
-
-        sql += " WHERE id=?";
-        params.push(id);
-
-        // 5. Execute Update with Error Handling
-        db.query(sql, params, (updateErr, result) => {
-            if (updateErr) {
-                console.error("SQL Error:", updateErr); // Log error to console
-                return res.json({ status: "Fail", message: updateErr.sqlMessage || "Update Failed" });
-            }
+        try {
+            let finalPassword = users[0].password;
             
-            // Check if any row was actually updated
-            if (result.affectedRows === 0) {
-                return res.json({ status: "Fail", message: "No changes made or ID not found" });
+            // 2. معالجة تغيير الباسورد
+            if (passToUpdate && passToUpdate.trim() !== "") {
+                // لو المستخدم مش أدمن، لازم نتأكد من الباسورد القديم
+                if (req.user.role !== 'admin') {
+                    if (!oldPassword) return res.json({ status: "Fail", message: "Old password required" });
+                    const isMatch = await bcrypt.compare(oldPassword, users[0].password);
+                    if (!isMatch) return res.json({ status: "Fail", message: "Wrong old password" });
+                }
+                // تشفير الباسورد الجديد
+                finalPassword = await bcrypt.hash(passToUpdate, 10);
             }
 
-            res.json({ status: "Success", newProfilePic: req.file?.path });
-        });
+            // 3. تحديد الـ Role (الأدمن بس اللي يقدر يغيره)
+            let finalRole = users[0].role;
+            if (req.user.role === 'admin' && role) {
+                finalRole = role;
+            }
+
+            // 4. تجهيز القيم (هنا كان سبب المشكلة: تحويل undefined إلى null)
+            // 🔴 FIX: Convert undefined to null to prevent crash
+            const safeLinkedin = linkedin || null;
+            const safeCv = cv_link || null;
+            const safeJob = job_title || null;
+
+            let sql = "UPDATE users SET name=?, email=?, phone=?, password=?, role=?, linkedin=?, cv_link=?, job_title=?";
+            let params = [name, email, phone, finalPassword, finalRole, safeLinkedin, safeCv, safeJob];
+
+            if (req.file) {
+                sql += ", profile_pic=?";
+                params.push(req.file.path);
+            }
+
+            sql += " WHERE id=?";
+            params.push(id);
+
+            // 5. تنفيذ التعديل
+            db.query(sql, params, (updateErr, result) => {
+                if (updateErr) {
+                    console.error("SQL Error:", updateErr); // طباعة الخطأ في التيرمينال
+                    // لو الخطأ بسبب أن الأعمدة مش موجودة في الداتا بيز
+                    if (updateErr.code === 'ER_BAD_FIELD_ERROR') {
+                        return res.json({ status: "Fail", message: "Database column missing. Contact Admin." });
+                    }
+                    return res.json({ status: "Fail", message: "Update Failed" });
+                }
+                
+                if (result.affectedRows === 0) {
+                    return res.json({ status: "Fail", message: "No changes made" });
+                }
+
+                res.json({ status: "Success", newProfilePic: req.file?.path });
+            });
+
+        } catch (serverError) {
+            console.error("Server Logic Error:", serverError);
+            res.status(500).json({ status: "Error", message: "Internal Server Error" });
+        }
     });
 });
 
