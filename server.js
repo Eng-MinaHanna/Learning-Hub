@@ -543,7 +543,7 @@ app.get('/api/leaderboard', verifyToken, (req, res) => {
         COALESCE((SELECT SUM(score) FROM quiz_attempts qa WHERE qa.user_email = u.email), 0) AS quiz_points,
         (SELECT COUNT(*) FROM posts p WHERE p.user_id = u.id) * 5 AS post_points,
         (SELECT COUNT(*) FROM comments c WHERE c.user_id = u.id) * 2 AS comment_points
-        FROM users u WHERE u.role != 'admin' ORDER BY (video_points + quiz_points + post_points + comment_points) DESC LIMIT 10`;
+        WHERE u.role NOT IN ('admin', 'company', 'instructor') ORDER BY (video_points + quiz_points + post_points + comment_points) DESC LIMIT 10`;
     db.query(sql, (err, data) => res.json(data));
 });
 
