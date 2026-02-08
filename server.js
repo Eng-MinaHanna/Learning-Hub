@@ -40,7 +40,7 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET;
 const INSTRUCTOR_SECRET = process.env.INSTRUCTOR_SECRET;
 
 // ==========================================
-// ☁️ Cloudinary Configuration (تم التحسين)
+// ☁️ Cloudinary Configuration
 // ==========================================
 cloudinary.config({
     cloud_name: 'ddgp71uok',
@@ -48,12 +48,11 @@ cloudinary.config({
     api_secret: '-jLxAlPA7tQ587Xdd38nYJ0H4lA'
 });
 
-// ✅ السماح بكل أنواع الملفات التعليمية
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: {
         folder: 'ieee_et5_main',
-        resource_type: 'auto', // يقبل فيديو، صوت، ملفات مضغوطة
+        resource_type: 'auto',
         allowed_formats: ['jpg', 'png', 'jpeg', 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'zip', 'rar', 'mp4'],
     },
 });
@@ -107,11 +106,26 @@ const reactionIcons = { like: '👍', love: '❤️', haha: '😂', wow: '😮',
 // 🔐 Auth APIs
 // ==========================================
 
+// تسجيل عادي (بيحتاج أكواد سرية للأدمن والمحاضر)
 app.post('/api/register', async (req, res) => {
     const { name, email, phone, password, role, secretKey } = req.body;
     if (role === 'admin' && secretKey !== ADMIN_SECRET) return res.json({ status: "Fail", message: "Wrong Admin Code" });
     if (role === 'instructor' && secretKey !== INSTRUCTOR_SECRET) return res.json({ status: "Fail", message: "Wrong Instructor Code" });
 
+    try {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const sql = "INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)";
+        db.query(sql, [name, email, phone, hashedPassword, role], (err) => {
+            if (err) return res.json({ status: "Fail", message: "Email already exists" });
+            res.json({ status: "Success" });
+        });
+    } catch (e) { res.status(500).json({ status: "Error" }); }
+});
+
+// ✅ (جديد) إضافة مستخدم/شركة بواسطة الأدمن (بدون كود سري)
+app.post('/api/admin/add-user', verifyAdmin, async (req, res) => {
+    const { name, email, phone, password, role } = req.body;
+    
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         const sql = "INSERT INTO users (name, email, phone, password, role) VALUES (?, ?, ?, ?, ?)";
@@ -137,11 +151,9 @@ app.post('/api/login', (req, res) => {
     });
 });
 
-// ✅ (تم التعديل) تحديث بيانات المستخدم لتشمل اللينكات
 app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => {
     const { id, name, email, phone, oldPassword, newPassword, linkedin, cv_link, job_title } = req.body;
     
-    // التحقق من الصلاحية
     if (req.user.id != id && req.user.role !== 'admin') return res.status(403).json({ status: "Fail" });
 
     db.query("SELECT * FROM users WHERE id = ?", [id], async (err, users) => {
@@ -154,7 +166,6 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
             finalPassword = await bcrypt.hash(newPassword, 10);
         }
 
-        // ✅ تحديث الحقول الجديدة (linkedin, cv, job)
         let sql = "UPDATE users SET name=?, email=?, phone=?, password=?, linkedin=?, cv_link=?, job_title=?";
         let params = [name, email, phone, finalPassword, linkedin, cv_link, job_title];
 
@@ -170,7 +181,6 @@ app.put('/api/user/update', verifyToken, upload.single('avatar'), (req, res) => 
     });
 });
 
-// ✅ مسار الاشتراك
 app.post('/api/check-subscription', verifyToken, (req, res) => {
     const { course_id, student_name } = req.body;
     db.query("SELECT * FROM registrations WHERE activity_id = ? AND student_name = ?", [course_id, student_name], (err, data) => {
@@ -239,7 +249,6 @@ app.get('/api/reactions', verifyToken, (req, res) => {
     });
 });
 
-// ✅ مسار حذف البوست
 app.delete('/api/posts/delete/:id', verifyToken, (req, res) => {
     const postId = req.params.id;
     const userId = req.user.id;
@@ -268,7 +277,6 @@ app.get('/api/comments/:postId', verifyToken, (req, res) => {
     db.query("SELECT * FROM comments WHERE post_id=? ORDER BY created_at ASC", [req.params.postId], (err, data) => res.json(data));
 });
 
-// ✅ جلب تعليقات الكورس
 app.get('/api/comments/course/:courseId', verifyToken, (req, res) => {
     db.query("SELECT * FROM comments WHERE course_id=? ORDER BY created_at ASC", [req.params.courseId], (err, data) => res.json(data));
 });
@@ -292,7 +300,6 @@ app.post('/api/comments/add', verifyToken, (req, res) => {
     }
 });
 
-// ✅ مسار حذف الكومنتات
 app.delete('/api/comments/delete/:id', verifyToken, (req, res) => {
     db.query("DELETE FROM comments WHERE id = ?", [req.params.id], (err) => {
         if (err) return res.status(500).json({ status: "Fail" });
@@ -362,14 +369,12 @@ app.get('/api/videos/:courseId', verifyToken, (req, res) => {
     db.query("SELECT * FROM course_videos WHERE course_id=? ORDER BY video_date ASC", [req.params.courseId], (err, data) => res.json(data));
 });
 
-// ✅ تحسين: رفع الفيديو كملف أو لينك
 app.post('/api/videos/add', verifyToken, upload.single('video_file'), (req, res) => {
     const videoLink = req.file ? req.file.path : req.body.video_link;
     const sql = "INSERT INTO course_videos (course_id, video_title, video_link, video_date) VALUES (?, ?, ?, ?)";
     db.query(sql, [req.body.course_id, req.body.video_title, videoLink, req.body.video_date], (err, result) => res.json({ status: "Success", id: result.insertId }));
 });
 
-// ✅ مسارات الفيديو (تعديل وحذف)
 app.put('/api/videos/update/:id', verifyToken, upload.single('video_file'), (req, res) => {
     const videoLink = req.file ? req.file.path : req.body.video_link;
     const sql = "UPDATE course_videos SET video_title=?, video_link=?, video_date=? WHERE id=?";
@@ -445,7 +450,6 @@ app.get('/api/materials/:courseId', verifyToken, (req, res) => {
     db.query("SELECT * FROM course_materials WHERE course_id = ?", [req.params.courseId], (err, data) => res.json(data));
 });
 
-// ✅ إضافة ماتريال عن طريق لينك خارجي (Drive)
 app.post('/api/materials/add', verifyToken, (req, res) => {
     const { course_id, title, link } = req.body; 
 
@@ -481,7 +485,6 @@ app.get('/api/stats', verifyAdmin, (req, res) => {
     db.query(sql, (err, data) => res.json(data[0]));
 });
 
-// ✅ (تم التعديل) إضافة اللينكات والـ Job Title للـ Leaderboard
 app.get('/api/leaderboard', verifyToken, (req, res) => {
     const sql = `SELECT u.id, u.name, u.profile_pic, u.role, u.linkedin, u.cv_link, u.job_title,
         (SELECT COUNT(*) FROM video_progress vp WHERE vp.user_email = u.email AND vp.is_completed = 1) * 10 AS video_points,
@@ -492,7 +495,6 @@ app.get('/api/leaderboard', verifyToken, (req, res) => {
     db.query(sql, (err, data) => res.json(data));
 });
 
-// ✅ جلب بيانات التيم (الأدمن والمحاضرين) لصفحة التقدير
 app.get('/api/team', verifyToken, (req, res) => {
     const sql = `SELECT name, role, profile_pic, email FROM users 
                  WHERE role IN ('admin', 'instructor') 
@@ -504,20 +506,13 @@ app.get('/api/team', verifyToken, (req, res) => {
 });
 
 // ==========================================
-// 📝 Tasks & Submissions APIs (New Feature)
+// 📝 Tasks & Submissions APIs
 // ==========================================
 
-// 1. الطالب يرفع التاسك بتاعه
 app.post('/api/tasks/submit', verifyToken, (req, res) => {
     const { course_id, video_id, task_link } = req.body;
     const user_id = req.user.id;
 
-    // بنعمل INSERT أو UPDATE لو الطالب رفع قبل كدة لنفس الفيديو
-    const sql = `INSERT INTO task_submissions (user_id, course_id, video_id, task_link) 
-                 VALUES (?, ?, ?, ?) 
-                 ON DUPLICATE KEY UPDATE task_link = VALUES(task_link), submitted_at = CURRENT_TIMESTAMP`;
-    
-    // هنا هنستخدم INSERT بسيط للتسهيل:
     db.query("INSERT INTO task_submissions (user_id, course_id, video_id, task_link) VALUES (?, ?, ?, ?)", 
         [user_id, course_id, video_id, task_link], 
         (err) => {
@@ -527,7 +522,6 @@ app.post('/api/tasks/submit', verifyToken, (req, res) => {
     );
 });
 
-// 2. الطالب يشوف التاسك اللي هو رفعه (عشان يتأكد)
 app.get('/api/tasks/my/:videoId', verifyToken, (req, res) => {
     const user_id = req.user.id;
     const video_id = req.params.videoId;
@@ -537,7 +531,6 @@ app.get('/api/tasks/my/:videoId', verifyToken, (req, res) => {
     );
 });
 
-// 3. المحاضر/الأدمن يشوفوا كل التاسكات للفيديو ده
 app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
     const video_id = req.params.videoId;
     const user_id = req.user.id;
