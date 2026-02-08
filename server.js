@@ -618,7 +618,44 @@ app.get('/api/tasks/all/:videoId', verifyToken, (req, res) => {
         }
     });
 });
+// ==========================================
+// 🤝 Partners & Sponsors APIs
+// ==========================================
 
+// 1. إضافة راعي أو شريك جديد (للأدمن فقط)
+app.post('/api/admin/sponsors/add', verifyAdmin, upload.single('logo'), (req, res) => {
+    const { name, type, website_link } = req.body;
+    
+    // لو الأدمن رفع ملف، نستخدمه. لو مرفعش وحط لينك مباشر، نستخدم اللينك (اختياري)
+    const logoUrl = req.file ? req.file.path : req.body.logo_url;
+
+    if (!name || !type || !logoUrl) {
+        return res.status(400).json({ status: "Fail", message: "Name, Type, and Logo are required" });
+    }
+
+    const sql = "INSERT INTO sponsors_partners (name, type, logo_url, website_link) VALUES (?, ?, ?, ?)";
+    db.query(sql, [name, type, logoUrl, website_link], (err) => {
+        if (err) return res.status(500).json({ status: "Error", message: err.message });
+        res.json({ status: "Success" });
+    });
+});
+
+// 2. حذف (للأدمن فقط)
+app.delete('/api/admin/sponsors/delete/:id', verifyAdmin, (req, res) => {
+    db.query("DELETE FROM sponsors_partners WHERE id = ?", [req.params.id], (err) => {
+        if (err) return res.status(500).json({ status: "Error" });
+        res.json({ status: "Deleted" });
+    });
+});
+
+// 3. جلب الكل (متاح للجميع - للصفحة الرئيسية ولوحة التحكم)
+// لاحظ: شيلنا verifyToken عشان الصفحة الرئيسية (Landing Page) بتفتح من غير تسجيل دخول
+app.get('/api/public/sponsors', (req, res) => {
+    db.query("SELECT * FROM sponsors_partners ORDER BY created_at DESC", (err, data) => {
+        if (err) return res.status(500).json({ status: "Error" });
+        res.json(data);
+    });
+});
 // ==========================================
 // 🚀 Start
 // ==========================================
